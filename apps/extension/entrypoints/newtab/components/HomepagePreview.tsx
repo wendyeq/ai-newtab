@@ -16,8 +16,11 @@ const INDEX_HTML = `<!DOCTYPE html>
  * model-generated, so it runs sandboxed rather than in the extension's own page.
  */
 export function HomepagePreview({ code }: { code: string }) {
+  const lightCode = code
+    .replaceAll("useState('dark')", "useState('light')")
+    .replaceAll('useState("dark")', "useState('light')");
   const files = {
-    "/App.js": { code },
+    "/App.js": { code: lightCode },
     "/index.js": { code: INDEX_JS },
     "/index.html": { code: INDEX_HTML },
   };
@@ -25,7 +28,7 @@ export function HomepagePreview({ code }: { code: string }) {
   return (
     <SandpackProvider files={files} template="react" options={{ autorun: true }}>
       <SandpackLayout style={{ height: "100vh", width: "100vw" }}>
-        <SandpackPreview style={{ height: "100%" }} />
+        <SandpackPreview showRefreshButton={false} showOpenInCodeSandbox={false} style={{ height: "100%" }} />
       </SandpackLayout>
     </SandpackProvider>
   );

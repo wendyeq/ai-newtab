@@ -1,4 +1,4 @@
-import { runHomepageBuild } from "@homepage/agent-core";
+import { credentialNeedle, runHomepageBuild } from "@homepage/agent-core";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import React from "react";
@@ -25,10 +25,11 @@ async function main() {
       onPhase: (phase) => console.log(`[${phase}]`),
     },
   });
-  if (result.code.includes(apiKey)) throw new Error("generated source contains the API key");
+  const needle = credentialNeedle(baseUrl, apiKey);
+  if (needle && result.code.includes(needle)) throw new Error("generated source contains the API key");
 
   const html = executeGeneratedHomepage(result.code);
-  if (html.includes(apiKey)) throw new Error("rendered homepage contains the API key");
+  if (needle && html.includes(needle)) throw new Error("rendered homepage contains the API key");
 
   mkdirSync(OUT_DIR, { recursive: true });
   const htmlPath = join(OUT_DIR, "homepage.html");
@@ -71,7 +72,9 @@ export function executeGeneratedHomepage(code: string): string {
 if (import.meta.main) {
   main().catch((error) => {
     const message = error instanceof Error ? error.message : "unknown error";
-    console.error(`build failed: ${apiKey ? message.split(apiKey).join("[redacted]") : message}`);
+    const baseUrl = process.env.AI_NEWTAB_BASE_URL;
+    const needle = baseUrl && apiKey ? credentialNeedle(baseUrl, apiKey) : "";
+    console.error(`build failed: ${needle ? message.split(needle).join("[redacted]") : message}`);
     process.exit(1);
   });
 }

@@ -47,7 +47,8 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
   if (!model.trim()) throw new Error("model must be nonempty");
   if (!apiKey.trim()) throw new Error("apiKey must be nonempty");
 
-  const redact = (text: string) => text.split(apiKey).join("[redacted]");
+  const needle = credentialNeedle(baseUrl, apiKey);
+  const redact = (text: string) => (needle ? text.split(needle).join("[redacted]") : text);
   const readBlockedSites = async () => {
     const listed = typeof opts.blockedSites === "function" ? await opts.blockedSites() : opts.blockedSites;
     return normalizeBlockList(listed ?? DEFAULT_BLOCKED_SITES);
@@ -134,7 +135,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
       async run(input) {
         const raw = typeof input.source === "string" ? input.source : "";
         const source = prepareHomepageSource(raw);
-        const error = homepageSourceError(source, apiKey);
+        const error = homepageSourceError(source, baseUrl, apiKey);
         if (error) return { error };
         code = source;
         callbacks?.onPhase?.("writing");
@@ -172,7 +173,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
     };
     messages.push(assistant);
     if (!assistant.tool_calls?.length) {
-      const action = plainReplyAction(assistant.content, apiKey, plainReplyNudges);
+      const action = plainReplyAction(assistant.content, baseUrl, apiKey, plainReplyNudges);
       if (action.type === "accept") {
         callbacks?.onPhase?.("writing");
         return { code: action.source };
@@ -253,22 +254,42 @@ const REACT_IMPORT = /(?:from\s*["']react(?:\/[^"']*)?["']|import\s+React\b)/;
 
 function plainReplyAction(
   content: string | null,
-  secret: string,
+  baseUrl: string,
+  apiKey: string,
   nudgesUsed: number,
 ): { type: "accept"; source: string } | { type: "nudge"; message: string } | { type: "stop" } {
   const source = prepareHomepageSource(content ?? "");
   const looksLike = looksLikeHomepageSource(source);
-  const error = looksLike ? homepageSourceError(source, secret) : null;
+  const error = looksLike ? homepageSourceError(source, baseUrl, apiKey) : null;
   if (looksLike && !error) return { type: "accept", source };
   if (nudgesUsed >= MAX_PLAIN_REPLY_NUDGES) return { type: "stop" };
   return { type: "nudge", message: error ? `${error}\n${SUBMIT_NUDGE}` : SUBMIT_NUDGE };
 }
 
-function homepageSourceError(source: string, secret: string): string | null {
+export function credentialNeedle(baseUrl: string, apiKey: string): string {
+  let hostname = "";
+  try {
+    hostname = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+  if (
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(hostname)
+  ) {
+    return "";
+  }
+  return apiKey.length >= 8 ? apiKey : "";
+}
+
+function homepageSourceError(source: string, baseUrl: string, apiKey: string): string | null {
   const problems: string[] = [];
   if (!source.includes("PersonalizedHomepage")) problems.push("missing PersonalizedHomepage");
   if (!REACT_IMPORT.test(source)) problems.push("missing react import");
-  if (secret.length > 0 && source.includes(secret)) problems.push("contains the API key");
+  const needle = credentialNeedle(baseUrl, apiKey);
+  if (needle && source.includes(needle)) problems.push("contains the API key");
   if (!problems.length) return null;
   return `source rejected: ${problems.join("; ")}`;
 }

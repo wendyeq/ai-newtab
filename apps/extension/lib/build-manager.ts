@@ -1,4 +1,4 @@
-import { runHomepageBuild, type RunPhase } from "@homepage/agent-core";
+import { credentialNeedle, runHomepageBuild, type RunPhase } from "@homepage/agent-core";
 import { shouldAutoRebuild } from "./auto-rebuild";
 import { browserBridge } from "./browser-bridge";
 import {
@@ -134,10 +134,12 @@ export class BuildManager {
     this.controller = new AbortController();
 
     let apiKey: string | null = null;
+    let apiBase = "";
     try {
       const settings = await loadSettings();
       const { baseUrl, systemPrompt, model } = settings;
       apiKey = settings.apiKey;
+      apiBase = baseUrl;
       if (!baseUrl.trim() || !apiKey?.trim() || !model.trim()) {
         const message = "Missing base URL, API key, or model. Complete your API settings and try again.";
         this.state = { ...INITIAL_BUILD_STATE, phase: "error", error: message };
@@ -175,7 +177,8 @@ export class BuildManager {
       console.log("[BuildManager] build done", { bytes: result.code.length });
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error);
-      const message = apiKey ? raw.split(apiKey).join("[redacted]") : raw;
+      const needle = apiKey ? credentialNeedle(apiBase, apiKey) : "";
+      const message = needle ? raw.split(needle).join("[redacted]") : raw;
       this.state = { ...this.state, running: false, phase: "error", error: message };
       this.broadcast({ kind: "error", message });
       await this.mirror(true);

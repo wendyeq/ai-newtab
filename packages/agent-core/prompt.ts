@@ -52,7 +52,7 @@ You have three tools:
   external stylesheet.
 - Every link must be a real absolute URL taken from the scraped content. Never
   invent a URL, never leave an \`href="#"\` placeholder.
-- Responsive, works dark or light, hover states and transitions where they help.
+- Responsive, light background only. Do not add a theme switch or a dark palette. Hover states and transitions are fine.
 - Emoji are fine as category markers; icon libraries are not.
 
 ## Editorial judgement

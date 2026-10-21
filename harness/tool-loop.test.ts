@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { runHomepageBuild, type BrowserBridge } from "@homepage/agent-core";
+import { credentialNeedle, runHomepageBuild, type BrowserBridge } from "@homepage/agent-core";
 import { fixtureHistory } from "./node-bridge";
 
 const source = [
@@ -382,13 +382,21 @@ test("stops after 16 turns without submitHomepage", async () => {
   }
 });
 
-test("rejects homepage source that contains the API key and continues", async () => {
-  const poisoned = cleanSource.replace("return <main />;", "return <main data-k=\"test-only-placeholder\" />;");
-  const { server, bodies, base } = serve((_request, hits) => Response.json({
+test("a loopback gateway does not treat its API key as homepage text", () => {
+  expect(credentialNeedle("http://127.0.0.1:3425/v1", "m")).toBe("");
+  expect(credentialNeedle("http://127.0.0.1:3425/v1", apiKey)).toBe("");
+  expect(credentialNeedle("http://localhost:3425/v1", apiKey)).toBe("");
+  expect(credentialNeedle("https://gate.example/v1", "m")).toBe("");
+  expect(credentialNeedle("https://gate.example/v1", apiKey)).toBe(apiKey);
+});
+
+test("accepts a homepage that contains the API key when the gateway is loopback", async () => {
+  const withKey = cleanSource.replace("return <main />;", "return <main data-k=\"test-only-placeholder\" />;");
+  const { server, seen, base } = serve(() => Response.json({
     choices: [{
       message: {
         content: null,
-        tool_calls: [submitCall(hits === 1 ? poisoned : cleanSource, hits === 1 ? "bad" : "ok")],
+        tool_calls: [submitCall(withKey)],
       },
     }],
   }));
@@ -399,11 +407,8 @@ test("rejects homepage source that contains the API key and continues", async ()
       model: "test-model",
       bridge: bridge(),
     });
-    expect(result.code).toBe(cleanSource);
-    expect(result.code.includes(apiKey)).toBe(false);
-    expect(JSON.parse(bodies[1]!.messages.find((message) => message.tool_call_id === "bad")!.content!)).toEqual({
-      error: "source rejected: contains the API key",
-    });
+    expect(result.code).toBe(withKey);
+    expect(seen).toHaveLength(1);
   } finally {
     server.stop(true);
   }
