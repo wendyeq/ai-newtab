@@ -1,40 +1,33 @@
 # Architecture
 
-There is no server. Three parties are involved, and you run one of them.
+There is no server of ours. The extension talks to the OpenAI-compatible API at the base URL you set.
 
 | | Runs where | Does what |
 |---|---|---|
-| **Extension** (service worker) | Your browser | Hosts the build: holds the SSE stream, executes `getHistory` / `getPageHtml`, uploads page HTML, persists the homepage |
+| **Extension** (service worker) | Your browser | Hosts the build: runs the chat loop, executes `getHistory` / `getPageHtml` / `submitHomepage`, persists the homepage |
 | **Extension** (new-tab page(s)) | Your browser | Thin view: subscribes to the worker over a port, renders live progress and the finished homepage |
-| **Orchestration layer** | Anthropic | Runs the agent loop, persists the session event log, emits `agent.custom_tool_use` |
-| **Session sandbox** | Anthropic | Runs `read` / `grep` / `glob` / `write` over the mounted pages |
+| **Chat API** | The base URL you set | Completes each turn (`POST /chat/completions`) and returns assistant text or tool calls |
 
-The agent loop runs **in the service worker** (`apps/extension/lib/build-manager.ts`), so a build
+The agent loop runs **in the service worker** (`apps/extension/lib/build-manager.ts` calls `runHomepageBuild`), so a build
 survives closing the tab, shows up in every open tab, and can run headless on a
-`chrome.alarms` schedule. The two custom tools execute in the extension too, because they
-need `chrome.history` and `chrome.tabs`. Anthropic never executes them — it emits an event
-and waits for a `user.custom_tool_result` on the same authenticated stream. There is no
+`chrome.alarms` schedule. The browser tools execute in the extension too, because they
+need `chrome.history` and `chrome.tabs`. Page HTML comes back inline in the `getPageHtml`
+tool result, truncated when it is long. There is no sandbox and no remote session: the only
+success path is `submitHomepage` with the component source. There is no
 inbound connection and no public endpoint.
 
 ```
-service worker        Anthropic loop        sandbox
-    │                       │                  │
-    ├─ sessions.create ────▶│                  │
-    ├─ events.stream ──────▶│  (open first)    │
-    ├─ user.message ───────▶│                  │
-    │◀─ custom_tool_use ────┤  getHistory      │
-    ├─ chrome.history ──────┤                  │
-    ├─ custom_tool_result ─▶│                  │
-    │◀─ custom_tool_use ────┤  getPageHtml     │
-    ├─ tabs + scripting     │                  │
-    ├─ files.upload ───────────────────────────▶
-    ├─ resources.add ──────────────────────────▶  mounts /mnt/session/uploads/pages/*.html
-    ├─ custom_tool_result ─▶│                  │
-    │                       ├─ grep / read ───▶│
-    │◀─ agent.message ──────┤                  │
-    │◀─ status_idle ────────┤  end_turn        │
-    ├─ files.list(scope_id) ───────────────────▶  /mnt/session/outputs/homepage.tsx
-    └─ sessions.delete ────▶│                  │
+service worker                         chat API
+    │                                      │
+    ├─ POST /chat/completions ────────────▶│  system + kickoff
+    │◀─ tool_calls: getHistory ────────────┤
+    ├─ chrome.history                      │
+    ├─ POST /chat/completions ────────────▶│  tool result: history digest
+    │◀─ tool_calls: getPageHtml ───────────┤
+    ├─ tabs + scripting                    │
+    ├─ POST /chat/completions ────────────▶│  tool result: inline HTML
+    │◀─ tool_calls: submitHomepage ────────┤
+    └─ save the component source           │
 ```
 
 ### Keeping the worker alive
@@ -42,11 +35,11 @@ service worker        Anthropic loop        sandbox
 An MV3 service worker is torn down after ~30s idle, and a build spends most of its
 wall clock waiting on the model. Three things keep it alive or bring it back:
 
-- **During a turn**, the in-flight session fetch plus a 20s self-ping
+- **During a turn**, the in-flight completion request plus a 20s self-ping
   (`runtime.getPlatformInfo`) reset the idle timer.
-- **A 1-minute alarm heartbeat** calls `BuildManager.tick()`. If an
-  `activeSessionId` is in storage, the worker reattaches: the orchestrator replays
-  the session's event log, re-answers any tool call left hanging, and finishes.
+- **A 1-minute alarm heartbeat** calls `BuildManager.tick()`. It does not
+  reattach a remote session. A worker restart drops the in-flight build; the
+  last saved homepage stays.
 - **The same heartbeat** drives scheduled rebuilds (`lib/auto-rebuild.ts`), so the
   first new tab of the day already shows a fresh homepage.
 
@@ -65,12 +58,12 @@ it runs sandboxed, not in the extension's own page.
 
 ```
 packages/agent-core/      host-agnostic agent loop — imports no chrome.*, browser.*, or node:*
-  orchestrator.ts         runHomepageBuild: session lifecycle, event loop, tool dispatch, cleanup
-  setup.ts                ensureAgent / ensureEnvironment (created once, cached by ID)
+  orchestrator.ts         runHomepageBuild: chat completions loop and tool dispatch
   prompt.ts               system prompt + per-build kickoff message
-  schemas.ts              custom tool input schemas and defaults
+  schemas.ts              tool input schemas and defaults
   history-digest.ts       narrows raw history to fit a tool result
-  types.ts                BrowserBridge, KVStore, RunPhase, …
+  site-filter.ts          blocklist, private-host, and address checks
+  types.ts                BrowserBridge, RunPhase, digest and scrape types
 
 apps/extension/           MV3 extension (WXT + React)
   entrypoints/
@@ -78,7 +71,7 @@ apps/extension/           MV3 extension (WXT + React)
     scraper.content.ts    injected into scraped tabs: scroll, return HTML
     newtab/               the new-tab UI (thin client onto the worker)
   lib/
-    build-manager.ts      single-flight build host, broadcast, keepalive, reattach
+    build-manager.ts      single-flight build host, broadcast, keepalive
     browser-bridge.ts     BrowserBridge over chrome.history / chrome.tabs
     history.ts            getHistory: group and rank chrome.history by domain
     scraper.ts            getPageHtml: load URLs in a background window, sanitize HTML
@@ -94,68 +87,55 @@ harness/                  Bun scripts: drive agent-core with a fixture/fetch bri
 
 | Command | Proves |
 |---|---|
-| `pnpm test` | The history digest is capped, ranked, drops `urls[]`, reports `totalSitesSeen` |
-| `pnpm agent:run` | Full build against the real API: tools, mounting, sandbox grep/read, deliverable, cleanup |
+| `pnpm test` | The history digest, the blocklist, and the chat tool loop (local mock, no API calls) |
+| `pnpm agent:run` | Full build against the configured API: history, inline HTML, `submitHomepage`; writes `harness/out` |
 | `pnpm agent:verify` | The deliverable transforms, evaluates and server-renders |
-| `pnpm agent:resume-test` | A build killed with a tool call pending can be reattached and finished |
-| `pnpm agent:retention <sessionId>` | The session and every uploaded page body are actually deleted |
 | `pnpm extension:test` | In headless Chrome: worker registers, new tab renders, port protocol answers, `chrome.history` reads |
 
-The `agent:*` commands need `ANTHROPIC_API_KEY` in `.env` and spend API credits. The
+`pnpm agent:run` needs `AI_NEWTAB_BASE_URL`, `AI_NEWTAB_API_KEY`, and `AI_NEWTAB_MODEL`
+in the environment and spends API credits. The
 harness's bridge uses fixture history and a plain `fetch`, so it can't see
 logged-in pages — that's the whole reason `getPageHtml` runs in your browser.
 
 ## Gotchas worth knowing
 
-**`mount_path` is always re-rooted under `/mnt/session/uploads/`.** A leading `/` is
-stripped, not honored — both at session-create time and via `resources.add()`:
+**The model must call `submitHomepage`.** A plain assistant reply ends the build
+with an error. The component source is the tool argument, not a file.
 
-| requested | resolved |
-|---|---|
-| `/workspace/pages/x.html` | `/mnt/session/uploads/workspace/pages/x.html` |
-| `/mnt/session/uploads/x.html` | `/mnt/session/uploads/x.html` |
-| *(omitted)* | `/mnt/session/uploads/<file_id>` |
+**Tool results carry the page.** `getPageHtml` returns sanitized HTML inline,
+cut at 24,000 characters, with `truncated: true` when that happens. There is no
+separate read of mounted files.
 
-Always report `resource.mount_path` from the response back to the model, never the
-path you asked for, or it greps a file that isn't there.
+**Every tool call gets a tool message.** An unknown tool name or arguments that
+are not JSON become `{"error":"..."}` and the loop continues. The next completion
+still has to see a result for that `tool_call_id`.
 
-**The result event field is `custom_tool_use_id`**, not `tool_use_id`. (`tool_use_id`
-belongs to `user.tool_confirmation` and `user.tool_result`.)
+**Blocked content never enters the tool JSON.** A redirect onto a blocked host,
+or a page served from a private address, is reported as
+`blocked by the user's settings` with no title and no HTML.
 
-**Never leave an `agent.custom_tool_use` unanswered.** Every path out of the handler
-must send a result — a thrown error becomes a result with `is_error: true`, never a
-reason to skip the send. An unanswered tool call idles the session forever.
-
-**Don't break on `session.status_idle` alone.** The session idles every time it waits
-for a tool result. Break only on `status_terminated`, or on `status_idle` where
-`stop_reason.type !== "requires_action"`. And run the terminal check for *every* event,
-including deduped ones — `continue`-ing on a duplicate can skip the terminal event that
-arrived in the history fetch.
-
-**`event_start` / `event_delta` stream events carry no `id`.** Skip them before dedupe.
-
-**`files.upload()` takes no `purpose`.** Just `{ file }`.
+**The loop stops at 16 completions.** A build that never submits throws
+`tool loop exceeded 16 turns`.
 
 ## Privacy
 
 The editable blocked-sites list is enforced in agent-core's tool handlers, not
 just the prompt: blocked domains are excluded from history digests and their
 counts, and blocked or non-HTTP(S) page requests never reach the browser bridge.
-Each scraped page's final URL is checked again before upload, so a redirect onto
+Each scraped page's final URL is checked again before the tool result is built, so a redirect onto
 a blocked host is dropped: the browser still loads it, but nothing it read is
 sent. Loopback, private-IP and local-network hosts are always blocked, whatever
 the list says. A name can still resolve to a private address (`fritz.box`, an
 intranet name), so the scraper also records the address each page was served
-from (`webRequest`, observe only) and the page is dropped before upload when it is
+from (`webRequest`, observe only) and the page is dropped before the tool result is built when it is
 private. That address is only reported when the extension's own API requests
 connect to a public address; behind a proxy at a private address, or when Chrome
 reports no address, the name check is all there is. History digests still list
 such a domain. Subresource loads are not intercepted.
 
-The session event log persists every domain, title and scraped page body server-side
-until deleted, and uploaded files persist independently. `runHomepageBuild` deletes
-both in a `finally`. Confirm retention/ZDR eligibility against current docs before
-distributing this.
+The history digest and page HTML are sent inline to the base URL you configured.
+There is no managed session and no uploaded file to delete afterwards. What that
+provider retains is its own policy. Confirm that before distributing this.
 
 The API key lives in `chrome.storage.local`, readable by anyone with access to the
 browser profile. Fine for a tool you run yourself; **do not ship this to the Web Store**

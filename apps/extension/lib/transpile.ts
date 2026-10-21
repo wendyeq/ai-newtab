@@ -1,8 +1,8 @@
 import { transform } from "sucrase";
 
 /**
- * Turn the agent's TSX into JS that Sandpack's React template can run. If the
- * transform throws, fall back to the raw source — Sandpack compiles TSX too.
+ * Turn the agent's TSX into CommonJS the sandbox page can evaluate. If the
+ * transform throws, fall back to the raw source and let the sandbox report it.
  */
 export function toRenderable(tsx: string): string {
   try {

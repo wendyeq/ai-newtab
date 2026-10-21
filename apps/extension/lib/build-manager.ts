@@ -1,5 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { runHomepageBuild, type RunPhase } from "@homepage/agent-core";
+import { credentialNeedle, runHomepageBuild, type RunPhase } from "@homepage/agent-core";
 import { shouldAutoRebuild } from "./auto-rebuild";
 import { browserBridge } from "./browser-bridge";
 import {
@@ -10,14 +9,14 @@ import {
   type BuildState,
   type PageMsg,
 } from "./protocol";
+import { armProxyProbe } from "./scraper";
 import { KEYS, extensionStore, loadHomepage, loadSettings, saveHomepage } from "./storage";
 
 type Port = Parameters<Parameters<typeof browser.runtime.onConnect.addListener>[0]>[0];
 
 /**
  * While a turn is active, ping a cheap chrome API on this interval to reset the
- * ~30s MV3 idle-unload timer. The ~1 min alarm heartbeat is the slower safety
- * net that reattaches after an unexpected kill.
+ * ~30s MV3 idle-unload timer.
  */
 const KEEPALIVE_INTERVAL_MS = 20_000;
 
@@ -29,8 +28,7 @@ const NARRATION_STORAGE_CAP = 2_000;
 /**
  * Owns the single build. Runs `runHomepageBuild` in the worker, holds live state,
  * enforces a single-flight lock, broadcasts progress to every connected tab,
- * mirrors a throttled snapshot to storage, and reattaches to an interrupted run
- * on wake.
+ * and mirrors a throttled snapshot to storage.
  *
  * There is one instance per service worker — i.e. one per browser profile — so
  * single-flight is per-profile, which is the right grain.
@@ -58,7 +56,7 @@ export class BuildManager {
         this.send(port, { kind: "snapshot", state: this.state });
         break;
       case "startBuild":
-        void this.startBuild({ resume: msg.resume });
+        void this.startBuild();
         break;
       case "cancel":
         this.cancel();
@@ -81,12 +79,6 @@ export class BuildManager {
 
   // ---- heartbeat -----------------------------------------------------------
 
-  /**
-   * Called on worker wake and on every alarm tick. If a session was left
-   * mid-flight, reattach and continue (lossless — the orchestrator replays the
-   * event log and re-answers orphaned tool calls). Otherwise, consider the daily
-   * rebuild. The single-flight lock is the arbiter that keeps these from racing.
-   */
   async tick() {
     if (this.running) {
       // A run is live but the worker may have just woken; make sure the
@@ -95,12 +87,7 @@ export class BuildManager {
       return;
     }
 
-    const sessionId = await extensionStore.get<string>(KEYS.activeSessionId);
-    if (sessionId) {
-      void this.startBuild({ resume: true });
-      return;
-    }
-
+    await this.clearStaleRunningSnapshot();
     await this.maybeAutoRebuild();
   }
 
@@ -116,7 +103,7 @@ export class BuildManager {
     if (
       !shouldAutoRebuild({
         enabled: settings.autoRebuild,
-        hasApiKey: Boolean(settings.apiKey),
+        hasApiKey: Boolean(settings.baseUrl && settings.apiKey && settings.model),
         isRunning: this.running,
         lastBuildTimestamp: homepage?.timestamp,
         lastAutoAttemptTimestamp: lastAttempt,
@@ -129,12 +116,12 @@ export class BuildManager {
     // Stamp the attempt before starting so a second wake (or a cancel/failure)
     // doesn't re-trigger it this morning.
     await extensionStore.set(KEYS.lastAutoBuildAttempt, now.toISOString());
-    void this.startBuild({ resume: false });
+    void this.startBuild();
   }
 
   // ---- the build -----------------------------------------------------------
 
-  async startBuild(opts: { resume?: boolean } = {}) {
+  async startBuild() {
     if (this.running) {
       console.log("[BuildManager] startBuild ignored — a build is already running");
       return; // single-flight: a second start just attaches.
@@ -142,17 +129,19 @@ export class BuildManager {
 
     // Claim the lock before the first await. On wake, tick() fires from several
     // listeners at once (top level, onStartup, onInstalled, the alarm); if the
-    // lock waited for loadSettings, each of them would start its own session.
+    // lock waited for loadSettings, each of them would start its own build.
     this.running = true;
     this.controller = new AbortController();
 
+    let apiKey: string | null = null;
+    let apiBase = "";
     try {
-      const { apiKey, systemPrompt, model } = await loadSettings();
-      if (!apiKey) {
-        // Manual builds are gated behind the key-setup screen and auto-builds
-        // require a key, so this only happens if the key was removed.
-        console.warn("[BuildManager] startBuild aborted — no API key in storage");
-        const message = "No Anthropic API key found. Add your key and try again.";
+      const settings = await loadSettings();
+      const { baseUrl, systemPrompt, model } = settings;
+      apiKey = settings.apiKey;
+      apiBase = baseUrl;
+      if (!baseUrl.trim() || !apiKey?.trim() || !model.trim()) {
+        const message = "Missing base URL, API key, or model. Complete your API settings and try again.";
         this.state = { ...INITIAL_BUILD_STATE, phase: "error", error: message };
         this.broadcast({ kind: "error", message });
         return;
@@ -161,24 +150,16 @@ export class BuildManager {
       this.state = { ...INITIAL_BUILD_STATE, running: true, phase: "setup" };
       this.broadcast({ kind: "snapshot", state: this.state });
       this.startKeepalive();
-      console.log("[BuildManager] build started", { resume: Boolean(opts.resume) });
-
-      // The key is the user's own, read from local storage — there is no server
-      // to hide it behind. See ARCHITECTURE.md → Privacy.
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-
-      const resumeSessionId = opts.resume
-        ? await extensionStore.get<string>(KEYS.activeSessionId)
-        : undefined;
+      console.log("[BuildManager] build started");
+      armProxyProbe(baseUrl);
 
       const result = await runHomepageBuild({
-        client,
+        baseUrl,
+        apiKey,
+        model,
         bridge: browserBridge,
-        store: extensionStore,
         userSystemPrompt: systemPrompt,
         blockedSites: async () => (await loadSettings()).blockedSites,
-        model,
-        resumeSessionId,
         signal: this.controller.signal,
         callbacks: {
           onPhase: (phase, detail) => this.onPhase(phase, detail),
@@ -193,14 +174,16 @@ export class BuildManager {
       this.state = { ...this.state, running: false, phase: "done" };
       this.broadcast({ kind: "done", code: result.code });
       await this.mirror(true);
-      console.log("[BuildManager] build done", { bytes: result.code.length, source: result.source });
+      console.log("[BuildManager] build done", { bytes: result.code.length });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const raw = error instanceof Error ? error.message : String(error);
+      const needle = apiKey ? credentialNeedle(apiBase, apiKey) : "";
+      const message = needle ? raw.split(needle).join("[redacted]") : raw;
       this.state = { ...this.state, running: false, phase: "error", error: message };
       this.broadcast({ kind: "error", message });
       await this.mirror(true);
       this.notifyFailure(message);
-      console.error("[BuildManager] build failed", error);
+      console.error("[BuildManager] build failed", message);
     } finally {
       this.running = false;
       this.controller = null;
@@ -208,8 +191,12 @@ export class BuildManager {
     }
   }
 
-  cancel() {
-    this.controller?.abort();
+  async cancel() {
+    if (this.controller) {
+      this.controller.abort();
+      return;
+    }
+    await this.publishIdle();
   }
 
   // ---- callback fan-out ----------------------------------------------------
@@ -233,6 +220,23 @@ export class BuildManager {
     this.state = { ...this.state, logs: [...this.state.logs.slice(-LOG_RETENTION), line] };
     this.broadcast({ kind: "log", line });
     void this.mirror(false);
+  }
+
+  // A killed worker never reaches the build's catch, so storage can still say running.
+  private async clearStaleRunningSnapshot() {
+    if (this.running || this.controller) return;
+    const snap = await extensionStore.get<BuildState>(KEYS.buildSnapshot);
+    if (this.running || this.controller || !snap?.running) return;
+    await this.publishIdle();
+  }
+
+  private async publishIdle() {
+    if (this.running || this.controller) return;
+    const idle: BuildState = { ...INITIAL_BUILD_STATE };
+    this.state = idle;
+    this.broadcast({ kind: "snapshot", state: idle });
+    await extensionStore.set(KEYS.buildSnapshot, idle);
+    if (this.running) await this.mirror(true);
   }
 
   // ---- storage mirror ------------------------------------------------------
@@ -271,7 +275,7 @@ export class BuildManager {
   private startKeepalive() {
     this.keepalive ??= setInterval(() => {
       // A cheap chrome API call resets the ~30s idle-unload timer while a turn is
-      // in flight (the in-flight session fetch does most of the work; this covers
+      // in flight (the in-flight model fetch does most of the work; this covers
       // the gaps between requests).
       void browser.runtime.getPlatformInfo();
     }, KEEPALIVE_INTERVAL_MS);

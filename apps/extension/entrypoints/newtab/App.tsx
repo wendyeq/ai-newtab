@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { DEFAULT_MODEL, DEFAULT_BLOCKED_SITES, type HomepageModel } from "@homepage/agent-core";
+import { DEFAULT_BLOCKED_SITES } from "@homepage/agent-core";
 import { BUILD_STEPS } from "@/lib/protocol";
-import { KEYS, extensionStore, loadHomepage, loadSettings, saveSetting } from "@/lib/storage";
+import { loadHomepage, loadSettings, saveSetting } from "@/lib/storage";
 import { toRenderable } from "@/lib/transpile";
 import { ApiKeySetup } from "./components/ApiKeySetup";
 import { BuildProgress } from "./components/BuildProgress";
@@ -12,15 +12,14 @@ import { useHomepageBuild } from "./useHomepageBuild";
 
 export default function App() {
   const [loading, setLoading] = useState(true);
+  const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [blockedSites, setBlockedSites] = useState<string[]>(DEFAULT_BLOCKED_SITES);
-  const [model, setModel] = useState<HomepageModel>(DEFAULT_MODEL);
+  const [model, setModel] = useState("");
   const [autoRebuild, setAutoRebuild] = useState(true);
   /** Transpiled homepage, ready for Sandpack. */
   const [renderedCode, setRenderedCode] = useState<string | null>(null);
-  /** A session left mid-flight, offered as "Resume interrupted build". */
-  const [resumable, setResumable] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   /** Expand the full progress view over an existing homepage. */
   const [viewProgress, setViewProgress] = useState(false);
@@ -39,17 +38,13 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [settings, homepage, activeSession] = await Promise.all([
-          loadSettings(),
-          loadHomepage(),
-          extensionStore.get<string>(KEYS.activeSessionId),
-        ]);
+        const [settings, homepage] = await Promise.all([loadSettings(), loadHomepage()]);
+        setBaseUrl(settings.baseUrl);
         setApiKey(settings.apiKey);
         setSystemPrompt(settings.systemPrompt);
         setBlockedSites(settings.blockedSites);
         setModel(settings.model);
         setAutoRebuild(settings.autoRebuild);
-        setResumable(activeSession ?? null);
         if (homepage?.code) setRenderedCode(toRenderable(homepage.code));
       } finally {
         setLoading(false);
@@ -57,16 +52,32 @@ export default function App() {
     })();
   }, []);
 
-  const saveKey = useCallback(async (key: string) => {
-    await saveSetting("apiKey", key);
-    setApiKey(key);
+  const saveKey = useCallback(async (settings: { baseUrl: string; apiKey: string; model: string }) => {
+    await Promise.all([
+      saveSetting("baseUrl", settings.baseUrl),
+      saveSetting("apiKey", settings.apiKey),
+      saveSetting("model", settings.model),
+    ]);
+    setBaseUrl(settings.baseUrl);
+    setApiKey(settings.apiKey);
+    setModel(settings.model);
   }, []);
 
   const savePrompt = useCallback(
-    async (prompt: string, sites: string[]) => {
-      await Promise.all([saveSetting("systemPrompt", prompt), saveSetting("blockedSites", sites)]);
-      setBlockedSites(sites);
-      setSystemPrompt(prompt);
+    async (next: { prompt: string; blockedSites: string[]; baseUrl: string; model: string; apiKey: string }) => {
+      const writes = [
+        saveSetting("systemPrompt", next.prompt),
+        saveSetting("blockedSites", next.blockedSites),
+        saveSetting("baseUrl", next.baseUrl),
+        saveSetting("model", next.model),
+      ];
+      if (next.apiKey) writes.push(saveSetting("apiKey", next.apiKey));
+      await Promise.all(writes);
+      setBaseUrl(next.baseUrl);
+      setModel(next.model);
+      if (next.apiKey) setApiKey(next.apiKey);
+      setBlockedSites(next.blockedSites);
+      setSystemPrompt(next.prompt);
       setShowSettings(false);
       setRenderedCode(null);
       build();
@@ -74,18 +85,13 @@ export default function App() {
     [build],
   );
 
-  // These persist immediately; the worker reads them on its next heartbeat or build.
-  const changeModel = useCallback(async (next: HomepageModel) => {
-    setModel(next);
-    await saveSetting("model", next);
-  }, []);
   const toggleAutoRebuild = useCallback(async (next: boolean) => {
     setAutoRebuild(next);
     await saveSetting("autoRebuild", next);
   }, []);
 
   if (loading) return <div style={{ padding: 20, textAlign: "center" }}>Loading…</div>;
-  if (!apiKey) return <ApiKeySetup onSave={saveKey} />;
+  if (!baseUrl.trim() || !apiKey?.trim() || !model.trim()) return <ApiKeySetup onSave={saveKey} />;
 
   // With no homepage to fall back to, a running build takes over the tab.
   if (state.running && (!renderedCode || viewProgress)) {
@@ -113,11 +119,6 @@ export default function App() {
           <button style={btn} onClick={() => build()}>
             Build today&apos;s homepage
           </button>
-          {resumable && (
-            <button style={{ ...btn, backgroundColor: "#555" }} onClick={() => build({ resume: true })}>
-              Resume interrupted build
-            </button>
-          )}
         </div>
       </div>
     );
@@ -202,8 +203,8 @@ export default function App() {
         <SettingsModal
           initialPrompt={systemPrompt}
           blockedSites={blockedSites}
+          baseUrl={baseUrl}
           model={model}
-          onChangeModel={changeModel}
           autoRebuild={autoRebuild}
           onToggleAutoRebuild={toggleAutoRebuild}
           onClose={() => setShowSettings(false)}

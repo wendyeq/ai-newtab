@@ -16,10 +16,11 @@ terminal, a zine.
 
 > **Privacy, up front.** To build your homepage, the extension sends a summary of
 > your browsing history (top domains, visit counts, a few page titles) and the
-> cleaned-up HTML of up to 8 pages to the Anthropic API, using your own API key.
+> cleaned-up HTML of up to 8 pages to the OpenAI-compatible API at the base URL
+> you enter, using your own API key.
 > Those pages are loaded in your signed-in browser, so they can include private
-> content. The agent session and every uploaded page are deleted when each build
-> ends. Your API key stays in the extension's local storage. More detail in
+> content. Your API key stays in the extension's local storage and is sent only
+> to that base URL. More detail in
 > [ARCHITECTURE.md](./ARCHITECTURE.md#privacy).
 
 ---
@@ -27,7 +28,7 @@ terminal, a zine.
 ## Install
 
 You need Chrome (or another Chromium browser), [Node.js](https://nodejs.org) 20+,
-and an [Anthropic API key](https://console.anthropic.com).
+and an API key for an OpenAI-compatible chat completions endpoint.
 
 ```bash
 git clone https://github.com/ThariqS/ai-newtab.git
@@ -48,7 +49,7 @@ If Chrome asks whether to keep the changed new-tab page, choose **Keep it**.
 
 ## Your first homepage
 
-1. Open a new tab and paste your Anthropic API key.
+1. Open a new tab and enter the base URL, API key, and model name.
 2. Click **Build today's homepage**.
 3. Watch it work. The progress view walks through each step: preparing the
    agent, reading your history, opening pages in your browser, analyzing them,
@@ -82,13 +83,10 @@ history summaries and URLs requested through `getPageHtml`. A page that redirect
 onto a blocked host is dropped before its content is uploaded. Local-network
 addresses (localhost, private IPs, `.local` and `.internal` hosts) are always blocked.
 
-**Model.** Choose which Claude model writes your page:
-
-- **Claude Sonnet 5.5** (default): the best balance of quality and cost.
-- **Claude Haiku 5.5**: the fastest and cheapest.
-- **Claude Opus 5.5**: the most careful editor, and the most expensive.
-
-The new model takes effect from your next build.
+**Base URL and model.** The base URL is an OpenAI-compatible API root, for
+example `https://gate.wendyeq.top/v1`. The model is the name that endpoint
+expects. Both are free text, and you can change them later in Settings. They
+take effect from your next build.
 
 **Rebuild automatically each morning.** On by default. The extension builds one
 morning edition a day, quietly in the background, the first time Chrome is open
@@ -100,16 +98,16 @@ morning, so it never loops.
 
 ## Good to know
 
-- **Cost.** Each build is a single agent session billed to your API key. What it
-  costs depends on the model and on how much it reads. Haiku is the cheapest
-  choice, and you can turn off automatic rebuilds to build only when you ask.
+- **Cost.** Each build is a series of chat completions billed by the provider
+  behind your base URL. What it costs depends on the model and on how much it
+  reads. You can turn off automatic rebuilds to build only when you ask.
 - **What it can see.** It ranks the sites in your history and opens up to 8 of
   them per build. It skips search engines, webmail, banking and logged-out
   marketing pages. Anything it can't open is reported, not hidden.
 - **Links are real.** Every link on the page comes from a page the agent actually
   read. It's told never to invent a URL.
-- **Interrupted builds.** If Chrome closes mid-build, the new tab offers
-  **Resume interrupted build** next time.
+- **Interrupted builds.** If Chrome closes mid-build, that run stops. The last
+  homepage that finished is still there; start a new build from the new tab.
 - **Updating.** After pulling new code, run `npx pnpm@10.11.1 build` again, then
   click the reload icon on the extension in `chrome://extensions`.
 
@@ -117,16 +115,14 @@ morning, so it never loops.
 
 1. **`getHistory`**: the agent gets a ranked summary of your most-visited domains.
 2. **`getPageHtml`**: it picks up to 8 pages, which the extension opens in a
-   background window, cleans up, and mounts into the agent's sandbox as files.
-3. **`grep` / `read`**: the agent pulls headlines, posts and links out of those
-   files inside its sandbox.
-4. **`write`**: it writes one React component, which the new tab renders.
+   background window, cleans up, and returns inline in the tool result. Long
+   pages are truncated.
+3. **`submitHomepage`**: it submits one React component, which the new tab renders.
 
-The extension's background worker drives a
-[Claude Managed Agents](https://docs.claude.com) session directly, with no server
-in between. The two custom tools run in the extension because they need
-`chrome.history` and `chrome.tabs`. Everything else happens in the agent's
-sandbox, where shell access is off: scraped pages are untrusted input.
+The extension's background worker runs the chat loop directly against your base
+URL, with no server of ours in between. The browser tools run in the extension
+because they need `chrome.history` and `chrome.tabs`. Scraped pages are untrusted
+input and come back as tool results, not as files.
 
 See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the event flow, the layout, and
 the gotchas worth knowing.
@@ -145,8 +141,8 @@ pnpm typecheck           # all packages
 pnpm test                # unit tests (no API calls; needs Bun)
 pnpm extension:test      # loads the built extension into headless Chrome (no API calls)
 
-cp .env.example .env     # add ANTHROPIC_API_KEY, then:
-pnpm agent:run           # a full build against the real API, with fixture history
+cp .env.example .env     # set AI_NEWTAB_BASE_URL, AI_NEWTAB_API_KEY, and AI_NEWTAB_MODEL, then:
+pnpm agent:run           # a full build against that API, with fixture history
 pnpm agent:verify        # check the output actually renders
 ```
 

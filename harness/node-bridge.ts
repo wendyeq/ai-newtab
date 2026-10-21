@@ -6,45 +6,11 @@
  * JS-rendered pages, which is the entire reason getPageHtml runs in the user's
  * browser in production.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { BrowserBridge, KVStore, RawSiteMetadata } from "@homepage/agent-core";
+import type { BrowserBridge, RawSiteMetadata, ScrapedPage } from "@homepage/agent-core";
 
-/** Harness state (cached agent/environment IDs, active session) and output, next to these scripts. */
-export const STATE_PATH = join(import.meta.dir, ".agent-state.json");
 export const OUT_DIR = join(import.meta.dir, "out");
 export const OUT_PATH = join(OUT_DIR, "homepage.tsx");
-
-export class FileKVStore implements KVStore {
-  constructor(private readonly path: string) {}
-
-  private read(): Record<string, unknown> {
-    if (!existsSync(this.path)) return {};
-    try {
-      return JSON.parse(readFileSync(this.path, "utf-8"));
-    } catch {
-      return {};
-    }
-  }
-
-  async get<T>(key: string): Promise<T | undefined> {
-    return this.read()[key] as T | undefined;
-  }
-
-  async set(key: string, value: unknown): Promise<void> {
-    const data = this.read();
-    data[key] = value;
-    writeFileSync(this.path, JSON.stringify(data, null, 2));
-  }
-
-  async remove(key: string): Promise<void> {
-    const data = this.read();
-    delete data[key];
-    writeFileSync(this.path, JSON.stringify(data, null, 2));
-  }
-}
-
-const DAY = 24 * 60 * 60 * 1000;
 
 /** Stand-in for what the extension's lib/history.ts produces from chrome.history. */
 export function fixtureHistory(now = Date.now()): RawSiteMetadata[] {
@@ -103,7 +69,7 @@ export const nodeBridge: BrowserBridge = {
   },
 
   async getPageHtml({ urls }) {
-    const pages: Array<{ url: string; title: string; html: string }> = [];
+    const pages: ScrapedPage[] = [];
     const failed: Array<{ url: string; reason: string }> = [];
 
     await Promise.all(
@@ -118,7 +84,7 @@ export const nodeBridge: BrowserBridge = {
             return;
           }
           const raw = await res.text();
-          pages.push({ url, title: titleOf(raw, url), html: cleanHtml(raw) });
+          pages.push({ url, finalUrl: res.url, title: titleOf(raw, url), html: cleanHtml(raw) });
         } catch (err) {
           failed.push({ url, reason: String(err) });
         }

@@ -1,80 +1,80 @@
-/**
- * End-to-end build against the real API (needs ANTHROPIC_API_KEY in .env).
- *
- * Exercises the exact orchestrator the extension runs, with a fixture/fetch
- * bridge standing in for chrome.history and chrome.tabs. Verifies: agent +
- * environment reuse, session lifecycle, custom-tool dispatch, mid-session file
- * mounting, sandbox grep/read, the written deliverable, and cleanup.
- *
- * Run: pnpm agent:run
- */
-import Anthropic from "@anthropic-ai/sdk";
-import { runHomepageBuild } from "@homepage/agent-core";
+import { credentialNeedle, runHomepageBuild } from "@homepage/agent-core";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { FileKVStore, OUT_DIR, OUT_PATH, STATE_PATH, nodeBridge } from "./node-bridge";
+import { join, relative } from "node:path";
+import React from "react";
+import { renderToString } from "react-dom/server";
+import { transform } from "sucrase";
+import { OUT_DIR, OUT_PATH, nodeBridge } from "./node-bridge";
+
+const apiKey = process.env.AI_NEWTAB_API_KEY;
 
 async function main() {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set (put it in .env)");
-
-  const client = new Anthropic({ apiKey });
-  const store = new FileKVStore(STATE_PATH);
-
-  mkdirSync(OUT_DIR, { recursive: true });
-
-  const started = Date.now();
-  let lastPhase = "";
+  const baseUrl = process.env.AI_NEWTAB_BASE_URL;
+  const model = process.env.AI_NEWTAB_MODEL;
+  if (!baseUrl || !apiKey || !model) {
+    throw new Error("Set AI_NEWTAB_BASE_URL, AI_NEWTAB_API_KEY, and AI_NEWTAB_MODEL");
+  }
 
   const result = await runHomepageBuild({
-    client,
+    baseUrl,
+    apiKey,
+    model,
     bridge: nodeBridge,
-    store,
     userSystemPrompt: process.env.HOMEPAGE_PROMPT,
     callbacks: {
-      onPhase: (phase, detail) => {
-        if (phase !== lastPhase) {
-          lastPhase = phase;
-          process.stdout.write(`\n\x1b[36m[${phase}]\x1b[0m${detail ? " " + detail : ""}\n`);
-        }
-      },
-      onText: (text) => process.stdout.write(text),
-      onLog: (line) => process.stdout.write(`\n\x1b[90m  · ${line}\x1b[0m\n`),
+      onPhase: (phase) => console.log(`[${phase}]`),
     },
   });
+  const needle = credentialNeedle(baseUrl, apiKey);
+  if (needle && result.code.includes(needle)) throw new Error("generated source contains the API key");
 
-  const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+  const html = executeGeneratedHomepage(result.code);
+  if (needle && html.includes(needle)) throw new Error("rendered homepage contains the API key");
+
+  mkdirSync(OUT_DIR, { recursive: true });
+  const htmlPath = join(OUT_DIR, "homepage.html");
   writeFileSync(OUT_PATH, result.code);
-
-  console.log("\n\n========== RESULT ==========");
-  console.log(`session      : ${result.sessionId}`);
-  console.log(`source       : ${result.source}`);
-  console.log(`code length  : ${result.code.length} bytes`);
-  console.log(`elapsed      : ${elapsed}s`);
-  console.log(`written to   : ${OUT_PATH}`);
-
-  // Shape checks. The real proof is `pnpm agent:verify`, which
-  // transforms, evaluates and server-renders the component.
-  const checks: Array<[string, boolean]> = [
-    // `export default function PersonalizedHomepage()` and
-    // `export default PersonalizedHomepage;` are both valid.
-    ["default-exports the component", /export\s+default\s+(function\s+)?PersonalizedHomepage\b/.test(result.code)],
-    ["imports React", /import\s+React/.test(result.code)],
-    ["no non-React imports", !/from\s+['"](?!react['"])[^'"]+['"]/.test(result.code)],
-    ["has real hrefs", /https?:\/\//.test(result.code)],
-  ];
-
-  console.log("\n========== CONTRACT ==========");
-  let ok = true;
-  for (const [label, pass] of checks) {
-    console.log(`${pass ? "✅" : "❌"} ${label}`);
-    if (!pass) ok = false;
-  }
-  console.log(`\nNext: pnpm agent:verify`);
-
-  process.exit(ok ? 0 : 1);
+  writeFileSync(htmlPath, html);
+  console.log(`${Buffer.byteLength(result.code)} bytes: ${relative(process.cwd(), OUT_PATH)}`);
+  console.log(`${Buffer.byteLength(html)} bytes: ${relative(process.cwd(), htmlPath)}`);
 }
 
-main().catch((err) => {
-  console.error("\n[run-agent] fatal:", err);
-  process.exit(1);
-});
+/** Generated source runs as a function. Hide the harness key from `process` and from `globalThis`. */
+export function executeGeneratedHomepage(code: string): string {
+  const js = transform(code, {
+    transforms: ["typescript", "jsx", "imports"],
+    jsxRuntime: "classic",
+  }).code;
+  const module_ = { exports: {} as { default?: unknown; PersonalizedHomepage?: unknown } };
+  const require_ = (name: string) => {
+    if (name === "react") return React;
+    throw new Error("component may only import React");
+  };
+  const keyName = "AI_NEWTAB_API_KEY";
+  const saved = process.env[keyName];
+  delete process.env[keyName];
+  try {
+    new Function("require", "module", "exports", "React", "process", js)(
+      require_,
+      module_,
+      module_.exports,
+      React,
+      { env: {} },
+    );
+    const Component = module_.exports.default ?? module_.exports.PersonalizedHomepage;
+    if (typeof Component !== "function") throw new Error("no default-exported component found");
+    return renderToString(React.createElement(Component as React.FunctionComponent));
+  } finally {
+    if (saved !== undefined) process.env[keyName] = saved;
+  }
+}
+
+if (import.meta.main) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : "unknown error";
+    const baseUrl = process.env.AI_NEWTAB_BASE_URL;
+    const needle = baseUrl && apiKey ? credentialNeedle(baseUrl, apiKey) : "";
+    console.error(`build failed: ${needle ? message.split(needle).join("[redacted]") : message}`);
+    process.exit(1);
+  });
+}
