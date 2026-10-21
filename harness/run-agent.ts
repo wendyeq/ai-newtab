@@ -27,24 +27,7 @@ async function main() {
   });
   if (result.code.includes(apiKey)) throw new Error("generated source contains the API key");
 
-  const js = transform(result.code, {
-    transforms: ["typescript", "jsx", "imports"],
-    jsxRuntime: "classic",
-  }).code;
-  const module_ = { exports: {} as any };
-  const require_ = (name: string) => {
-    if (name === "react") return React;
-    throw new Error("component may only import React");
-  };
-  new Function("require", "module", "exports", "React", js)(
-    require_,
-    module_,
-    module_.exports,
-    React,
-  );
-  const Component = module_.exports.default ?? module_.exports.PersonalizedHomepage;
-  if (typeof Component !== "function") throw new Error("no default-exported component found");
-  const html = renderToString(React.createElement(Component));
+  const html = executeGeneratedHomepage(result.code);
   if (html.includes(apiKey)) throw new Error("rendered homepage contains the API key");
 
   mkdirSync(OUT_DIR, { recursive: true });
@@ -55,8 +38,40 @@ async function main() {
   console.log(`${Buffer.byteLength(html)} bytes: ${relative(process.cwd(), htmlPath)}`);
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : "unknown error";
-  console.error(`build failed: ${apiKey ? message.split(apiKey).join("[redacted]") : message}`);
-  process.exit(1);
-});
+/** Generated source runs as a function. Hide the harness key from `process` and from `globalThis`. */
+export function executeGeneratedHomepage(code: string): string {
+  const js = transform(code, {
+    transforms: ["typescript", "jsx", "imports"],
+    jsxRuntime: "classic",
+  }).code;
+  const module_ = { exports: {} as { default?: unknown; PersonalizedHomepage?: unknown } };
+  const require_ = (name: string) => {
+    if (name === "react") return React;
+    throw new Error("component may only import React");
+  };
+  const keyName = "AI_NEWTAB_API_KEY";
+  const saved = process.env[keyName];
+  delete process.env[keyName];
+  try {
+    new Function("require", "module", "exports", "React", "process", js)(
+      require_,
+      module_,
+      module_.exports,
+      React,
+      { env: {} },
+    );
+    const Component = module_.exports.default ?? module_.exports.PersonalizedHomepage;
+    if (typeof Component !== "function") throw new Error("no default-exported component found");
+    return renderToString(React.createElement(Component as React.FunctionComponent));
+  } finally {
+    if (saved !== undefined) process.env[keyName] = saved;
+  }
+}
+
+if (import.meta.main) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : "unknown error";
+    console.error(`build failed: ${apiKey ? message.split(apiKey).join("[redacted]") : message}`);
+    process.exit(1);
+  });
+}

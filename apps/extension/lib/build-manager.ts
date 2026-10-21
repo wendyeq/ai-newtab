@@ -87,6 +87,7 @@ export class BuildManager {
       return;
     }
 
+    await this.clearStaleRunningSnapshot();
     await this.maybeAutoRebuild();
   }
 
@@ -187,8 +188,12 @@ export class BuildManager {
     }
   }
 
-  cancel() {
-    this.controller?.abort();
+  async cancel() {
+    if (this.controller) {
+      this.controller.abort();
+      return;
+    }
+    await this.publishIdle();
   }
 
   // ---- callback fan-out ----------------------------------------------------
@@ -212,6 +217,23 @@ export class BuildManager {
     this.state = { ...this.state, logs: [...this.state.logs.slice(-LOG_RETENTION), line] };
     this.broadcast({ kind: "log", line });
     void this.mirror(false);
+  }
+
+  // A killed worker never reaches the build's catch, so storage can still say running.
+  private async clearStaleRunningSnapshot() {
+    if (this.running || this.controller) return;
+    const snap = await extensionStore.get<BuildState>(KEYS.buildSnapshot);
+    if (this.running || this.controller || !snap?.running) return;
+    await this.publishIdle();
+  }
+
+  private async publishIdle() {
+    if (this.running || this.controller) return;
+    const idle: BuildState = { ...INITIAL_BUILD_STATE };
+    this.state = idle;
+    this.broadcast({ kind: "snapshot", state: idle });
+    await extensionStore.set(KEYS.buildSnapshot, idle);
+    if (this.running) await this.mirror(true);
   }
 
   // ---- storage mirror ------------------------------------------------------

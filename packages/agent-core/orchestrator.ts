@@ -43,20 +43,9 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
   const { baseUrl, apiKey, model, bridge, callbacks, signal } = opts;
   callbacks?.onPhase?.("setup");
 
-  const trimmedBaseUrl = baseUrl.trim();
-  const baseUrlError = "baseUrl must be an http or https URL without userinfo";
-  let endpoint: URL;
-  try {
-    endpoint = new URL(trimmedBaseUrl);
-  } catch {
-    throw new Error(baseUrlError);
-  }
-  if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
-    throw new Error(baseUrlError);
-  }
+  const completionsUrl = chatCompletionsUrl(baseUrl);
   if (!model.trim()) throw new Error("model must be nonempty");
   if (!apiKey.trim()) throw new Error("apiKey must be nonempty");
-  const completionsUrl = `${trimmedBaseUrl.replace(/\/+$/, "")}/chat/completions`;
 
   const redact = (text: string) => text.split(apiKey).join("[redacted]");
   const readBlockedSites = async () => {
@@ -70,8 +59,18 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
       description: "Returns a ranked digest of the user's most-visited domains. Call this first, once.",
       parameters: GET_HISTORY_SCHEMA,
       async run(input, blockedSites) {
-        const daysToAnalyze = (input.daysToAnalyze as number | undefined) ?? DEFAULTS.daysToAnalyze;
-        const maxResults = (input.maxResults as number | undefined) ?? DEFAULTS.maxResults;
+        const daysToAnalyze = clampInt(
+          input.daysToAnalyze,
+          schemaNumber(GET_HISTORY_SCHEMA, "daysToAnalyze", "minimum"),
+          schemaNumber(GET_HISTORY_SCHEMA, "daysToAnalyze", "maximum"),
+          DEFAULTS.daysToAnalyze,
+        );
+        const maxResults = clampInt(
+          input.maxResults,
+          schemaNumber(GET_HISTORY_SCHEMA, "maxResults", "minimum"),
+          schemaNumber(GET_HISTORY_SCHEMA, "maxResults", "maximum"),
+          DEFAULTS.maxResults,
+        );
         callbacks?.onPhase?.("history", `${daysToAnalyze}d`);
         const { sites, totalSitesSeen } = await bridge.getHistory({ daysToAnalyze, maxResults });
         const allowed = sites.filter((site) => !isBlocked(site.domain, blockedSites));
@@ -91,10 +90,11 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
         if (!Array.isArray(input.urls) || !input.urls.every((url) => typeof url === "string")) {
           throw new Error("getPageHtml requires a urls array of strings");
         }
-        callbacks?.onPhase?.("scraping", `${input.urls.length} pages`);
+        const urls = input.urls.slice(0, schemaNumber(GET_PAGE_HTML_SCHEMA, "urls", "maxItems"));
+        callbacks?.onPhase?.("scraping", `${urls.length} pages`);
         const allowed: string[] = [];
         const failed: GetPageHtmlResult["failed"] = [];
-        for (const url of input.urls) {
+        for (const url of urls) {
           if (isAllowedUrl(url, blockedSites)) allowed.push(url);
           else failed.push({ url, reason: "blocked by the user's settings" });
         }
@@ -203,6 +203,41 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
     if (assistant.content) callbacks?.onText?.(redact(assistant.content));
   }
   throw new Error("tool loop exceeded 16 turns");
+}
+
+function chatCompletionsUrl(baseUrl: string): string {
+  const baseUrlError = "baseUrl must be an http or https URL without userinfo, query, or hash";
+  let endpoint: URL;
+  try {
+    endpoint = new URL(baseUrl.trim());
+  } catch {
+    throw new Error(baseUrlError);
+  }
+  if (
+    !["http:", "https:"].includes(endpoint.protocol) ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.search ||
+    endpoint.hash
+  ) {
+    throw new Error(baseUrlError);
+  }
+  const path = endpoint.pathname.replace(/\/+$/, "");
+  endpoint.pathname = path.endsWith("/chat/completions") ? path : `${path}/chat/completions`;
+  return endpoint.href;
+}
+
+function schemaNumber(schema: ToolInputSchema, key: string, field: string): number {
+  const prop = schema.properties[key];
+  if (!prop || typeof prop !== "object") throw new Error(`missing schema for ${key}`);
+  const value = (prop as Record<string, unknown>)[field];
+  if (typeof value !== "number") throw new Error(`missing schema ${key}.${field}`);
+  return value;
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
 function stripFence(text: string): string {

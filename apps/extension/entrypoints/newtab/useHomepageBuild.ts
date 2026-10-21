@@ -45,12 +45,14 @@ export function useHomepageBuild(onDone: (code: string) => void) {
   const [state, setState] = useState<BuildState>(INITIAL_BUILD_STATE);
   const portRef = useRef<Port | null>(null);
   const onDoneRef = useRef(onDone);
+  const heardWorkerRef = useRef(false);
   onDoneRef.current = onDone;
 
   useEffect(() => {
     let disposed = false;
 
     const handleMsg = (raw: unknown) => {
+      heardWorkerRef.current = true;
       const msg = raw as BuildMsg;
       if (msg.kind === "done") onDoneRef.current(msg.code);
       setState((s) => reduce(s, msg));
@@ -71,10 +73,12 @@ export function useHomepageBuild(onDone: (code: string) => void) {
 
     connect();
 
-    // Paint last-known state instantly if the worker is asleep — the snapshot
-    // from the freshly woken worker follows.
+    // Paint last-known state instantly if the worker is asleep. Once it has
+    // spoken, ignore storage. A late read must not restore a build the
+    // restarted worker already dropped.
     void extensionStore.get<BuildState>(KEYS.buildSnapshot).then((snap) => {
-      if (snap?.running) setState((s) => (s.running || s.phase ? s : snap));
+      if (!snap?.running || heardWorkerRef.current) return;
+      setState((s) => (s.running || s.phase ? s : snap));
     });
 
     return () => {
