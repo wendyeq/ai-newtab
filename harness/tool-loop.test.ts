@@ -339,7 +339,7 @@ test("stops on a non-2xx chat completions response", async () => {
 });
 
 test("stops when the model returns no tool calls", async () => {
-  const { server, base } = serve(() => Response.json({
+  const { server, bodies, seen, base } = serve(() => Response.json({
     choices: [{ message: { content: "plain text" } }],
   }));
   try {
@@ -349,6 +349,12 @@ test("stops when the model returns no tool calls", async () => {
       model: "test-model",
       bridge: bridge(),
     })).rejects.toThrow("the model stopped without submitHomepage");
+    expect(seen).toHaveLength(3);
+    const nudges = bodies.slice(1).map((body) => body.messages.filter((message) => message.role === "user").at(-1)?.content);
+    expect(nudges).toEqual([
+      "只调用 submitHomepage，把完整源码放进 source",
+      "只调用 submitHomepage，把完整源码放进 source",
+    ]);
   } finally {
     server.stop(true);
   }
@@ -396,8 +402,128 @@ test("rejects homepage source that contains the API key and continues", async ()
     expect(result.code).toBe(cleanSource);
     expect(result.code.includes(apiKey)).toBe(false);
     expect(JSON.parse(bodies[1]!.messages.find((message) => message.tool_call_id === "bad")!.content!)).toEqual({
-      error: "source must be a PersonalizedHomepage React component",
+      error: "source rejected: contains the API key",
     });
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("accepts fenced PersonalizedHomepage text when the model sends no tool calls", async () => {
+  const pasted = [
+    "Here is the homepage:",
+    "```tsx",
+    cleanSource,
+    "```",
+    "I can tweak spacing if you want.",
+  ].join("\n");
+  const { server, seen, base } = serve(() => Response.json({
+    choices: [{ message: { content: pasted } }],
+  }));
+  try {
+    const result = await runHomepageBuild({
+      baseUrl: `${base}/v1`,
+      apiKey,
+      model: "test-model",
+      bridge: bridge(),
+    });
+    expect(result.code).toBe(cleanSource);
+    expect(seen).toHaveLength(1);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("nudges a plain reply then accepts submitHomepage", async () => {
+  const { server, bodies, seen, base } = serve((_request, hits) => {
+    if (hits === 1) {
+      return Response.json({ choices: [{ message: { content: "I will describe the homepage instead of submitting it." } }] });
+    }
+    return Response.json({ choices: [{ message: { content: null, tool_calls: [submitCall(cleanSource)] } }] });
+  });
+  try {
+    const result = await runHomepageBuild({
+      baseUrl: `${base}/v1`,
+      apiKey,
+      model: "test-model",
+      bridge: bridge(),
+    });
+    expect(result.code).toBe(cleanSource);
+    expect(seen).toHaveLength(2);
+    expect(bodies[1]!.messages.filter((message) => message.role === "user").at(-1)?.content).toBe(
+      "只调用 submitHomepage，把完整源码放进 source",
+    );
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("names the missing PersonalizedHomepage declaration", async () => {
+  const unnamed = 'import React from "react";\nexport default function Homepage() { return <main />; }';
+  const { server, bodies, base } = serve((_request, hits) => Response.json({
+    choices: [{
+      message: {
+        content: null,
+        tool_calls: [submitCall(hits === 1 ? unnamed : cleanSource, hits === 1 ? "bad" : "ok")],
+      },
+    }],
+  }));
+  try {
+    const result = await runHomepageBuild({
+      baseUrl: `${base}/v1`,
+      apiKey,
+      model: "test-model",
+      bridge: bridge(),
+    });
+    expect(result.code).toBe(cleanSource);
+    expect(JSON.parse(bodies[1]!.messages.find((message) => message.tool_call_id === "bad")!.content!)).toEqual({
+      error: "source rejected: missing PersonalizedHomepage",
+    });
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("names a missing react import", async () => {
+  const bare = "export default function PersonalizedHomepage() { return <main />; }";
+  const { server, bodies, base } = serve((_request, hits) => Response.json({
+    choices: [{
+      message: {
+        content: null,
+        tool_calls: [submitCall(hits === 1 ? bare : cleanSource, hits === 1 ? "bad" : "ok")],
+      },
+    }],
+  }));
+  try {
+    const result = await runHomepageBuild({
+      baseUrl: `${base}/v1`,
+      apiKey,
+      model: "test-model",
+      bridge: bridge(),
+    });
+    expect(result.code).toBe(cleanSource);
+    expect(JSON.parse(bodies[1]!.messages.find((message) => message.tool_call_id === "bad")!.content!)).toEqual({
+      error: "source rejected: missing react import",
+    });
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("extracts submitHomepage source from prose and an unclosed fence", async () => {
+  const wrapped = `Do not embed ${apiKey}.\n\`\`\`tsx\n${cleanSource}`;
+  const { server, base } = serve(() => Response.json({
+    choices: [{ message: { content: null, tool_calls: [submitCall(wrapped)] } }],
+  }));
+  try {
+    const result = await runHomepageBuild({
+      baseUrl: `${base}/v1`,
+      apiKey,
+      model: "test-model",
+      bridge: bridge(),
+    });
+    expect(result.code).toBe(cleanSource);
+    expect(result.code.includes(apiKey)).toBe(false);
   } finally {
     server.stop(true);
   }
