@@ -34,12 +34,19 @@ const DEFAULT_OPTIONS: Required<ScrapeOptions> = {
  * says nothing about the page's host and is not reported.
  */
 let apiAddress: string | undefined;
-browser.webRequest.onResponseStarted.addListener(
-  (details) => {
-    apiAddress = details.ip;
-  },
-  { urls: ["https://api.anthropic.com/*"], tabId: -1 },
-);
+const recordApiAddress = (details: { ip?: string }) => {
+  apiAddress = details.ip;
+};
+
+export function armProxyProbe(baseUrl: string) {
+  const origin = new URL(baseUrl.trim()).origin;
+  apiAddress = undefined;
+  browser.webRequest.onResponseStarted.removeListener(recordApiAddress);
+  browser.webRequest.onResponseStarted.addListener(recordApiAddress, {
+    urls: [`${origin}/*`],
+    tabId: -1,
+  });
+}
 
 /** Keep content and links; drop scripts, styles, attributes and empty wrappers. */
 function cleanHtmlForLLM(html: string) {

@@ -1,12 +1,3 @@
-/**
- * Input schemas for the two custom tools. The caps live in the schema, not just
- * the handler, so the model can see the ceiling it is working against.
- */
-
-/**
- * Structurally compatible with the SDK's `BetaManagedAgentsCustomToolInputSchema`,
- * which wants a mutable `required` and an open index signature.
- */
 export interface ToolInputSchema {
   type: "object";
   properties: Record<string, unknown>;

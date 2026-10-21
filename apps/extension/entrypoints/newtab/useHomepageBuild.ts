@@ -63,9 +63,7 @@ export function useHomepageBuild(onDone: (code: string) => void) {
       port.onMessage.addListener(handleMsg);
       port.onDisconnect.addListener(() => {
         portRef.current = null;
-        // A disconnect means the worker was torn down (update, crash, or the
-        // ~5 min port cap). Reconnecting wakes it, and its tick() reattaches to
-        // any interrupted run.
+        // A disconnect can mean either worker teardown or the ~5 min port cap.
         if (!disposed) setTimeout(connect, 500);
       });
       port.postMessage({ kind: "subscribe" } satisfies PageMsg);
@@ -86,8 +84,8 @@ export function useHomepageBuild(onDone: (code: string) => void) {
     };
   }, []);
 
-  const build = useCallback((opts?: { resume?: boolean }) => {
-    portRef.current?.postMessage({ kind: "startBuild", resume: opts?.resume } satisfies PageMsg);
+  const build = useCallback(() => {
+    portRef.current?.postMessage({ kind: "startBuild" } satisfies PageMsg);
     // Optimistic: flip to the build screen now; the worker's snapshot and
     // deltas take over from here.
     setState({ ...INITIAL_BUILD_STATE, running: true, phase: "setup" });

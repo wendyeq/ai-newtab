@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { MODEL_CHOICES, normalizeBlockList, type HomepageModel } from "@homepage/agent-core";
+import { normalizeBlockList } from "@homepage/agent-core";
 import { btn } from "./ui";
 
 export function SettingsModal({
   initialPrompt,
   blockedSites,
+  baseUrl,
   model,
-  onChangeModel,
   autoRebuild,
   onToggleAutoRebuild,
   onClose,
@@ -14,15 +14,18 @@ export function SettingsModal({
 }: {
   initialPrompt: string;
   blockedSites: string[];
-  model: HomepageModel;
-  onChangeModel: (next: HomepageModel) => void;
+  baseUrl: string;
+  model: string;
   autoRebuild: boolean;
   onToggleAutoRebuild: (next: boolean) => void;
   onClose: () => void;
-  onSave: (prompt: string, blockedSites: string[]) => void;
+  onSave: (prompt: string, blockedSites: string[], baseUrl: string, model: string, apiKey: string) => void;
 }) {
   const [draft, setDraft] = useState(initialPrompt);
   const [blockedDraft, setBlockedDraft] = useState(blockedSites.join("\n"));
+  const [baseUrlDraft, setBaseUrlDraft] = useState(baseUrl);
+  const [modelDraft, setModelDraft] = useState(model);
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
 
   return (
     <div
@@ -66,21 +69,35 @@ export function SettingsModal({
         <p id="blocked-sites-help" style={{ color: "#888", fontSize: 12, margin: "6px 0 0" }}>
           One per line. Subdomains are included. Use *.example.com for wildcards.
         </p>
-        <label
-          style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, color: "#333", fontSize: 14 }}
-        >
+        <label style={{ display: "block", marginTop: 16, color: "#333", fontSize: 14 }}>
+          Base URL
+          <input
+            type="text"
+            value={baseUrlDraft}
+            onChange={(e) => setBaseUrlDraft(e.target.value)}
+            placeholder="https://gate.wendyeq.top/v1"
+            style={{ width: "100%", boxSizing: "border-box", marginTop: 8, padding: "8px 12px", fontSize: 14, borderRadius: 4, border: "1px solid #ddd" }}
+          />
+        </label>
+        <label style={{ display: "block", marginTop: 16, color: "#333", fontSize: 14 }}>
+          API key
+          <input
+            type="password"
+            value={apiKeyDraft}
+            onChange={(e) => setApiKeyDraft(e.target.value)}
+            placeholder="Leave blank to keep the saved key"
+            autoComplete="off"
+            style={{ width: "100%", boxSizing: "border-box", marginTop: 8, padding: "8px 12px", fontSize: 14, borderRadius: 4, border: "1px solid #ddd" }}
+          />
+        </label>
+        <label style={{ display: "block", marginTop: 16, color: "#333", fontSize: 14 }}>
           Model
-          <select
-            value={model}
-            onChange={(e) => onChangeModel(e.target.value as HomepageModel)}
-            style={{ padding: "4px 8px", fontSize: 14, borderRadius: 4, border: "1px solid #ddd" }}
-          >
-            {MODEL_CHOICES.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
+          <input
+            type="text"
+            value={modelDraft}
+            onChange={(e) => setModelDraft(e.target.value)}
+            style={{ width: "100%", boxSizing: "border-box", marginTop: 8, padding: "8px 12px", fontSize: 14, borderRadius: 4, border: "1px solid #ddd" }}
+          />
         </label>
         <label
           style={{
@@ -111,7 +128,11 @@ export function SettingsModal({
           >
             Cancel
           </button>
-          <button onClick={() => onSave(draft, normalizeBlockList(blockedDraft.split("\n")))} style={btn}>
+          <button
+            disabled={!baseUrlDraft.trim() || !modelDraft.trim()}
+            onClick={() => onSave(draft, normalizeBlockList(blockedDraft.split("\n")), baseUrlDraft.trim(), modelDraft.trim(), apiKeyDraft.trim())}
+            style={btn}
+          >
             Save &amp; rebuild
           </button>
         </div>

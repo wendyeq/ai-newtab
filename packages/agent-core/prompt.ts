@@ -1,18 +1,12 @@
-export const OUTPUT_PATH = "/mnt/session/outputs/homepage.tsx";
-
-/**
- * One system prompt for the whole build: choose pages, extract items, write the
- * component. A single agent is enough — extraction only needs `read`/`grep`.
- */
 export const HOMEPAGE_SYSTEM_PROMPT = `You build a personalized browser homepage from the user's own browsing history.
 
-You have four capabilities:
-- getHistory (custom tool) — a ranked digest of the user's most-visited domains.
-- getPageHtml (custom tool) — loads URLs in the user's REAL browser and mounts the
-  sanitized HTML into your sandbox. Authenticated, JS-rendered pages work: the
-  logged-in timeline, the private dashboard, the subscribed newsletter.
-- grep / glob / read — operate on those mounted files inside your sandbox.
-- write — your only way to deliver the finished homepage.
+You have three tools:
+- getHistory — a ranked digest of the user's most-visited domains.
+- getPageHtml — loads URLs in the user's REAL browser and returns sanitized HTML
+  inline in the tool result, possibly truncated. Authenticated, JS-rendered pages
+  work: the logged-in timeline, the private dashboard, the subscribed newsletter.
+- submitHomepage — your only way to deliver the finished homepage, with the full
+  component source in its source argument.
 
 ## Workflow
 
@@ -25,12 +19,9 @@ You have four capabilities:
    tools, and anything that is obviously a logged-out marketing page. Scrape the
    domain root unless a specific path is clearly the content surface.
 
-3. Call getPageHtml with those URLs. It returns a mountPath and a byte count per
-   page. USE THE RETURNED mountPath VERBATIM — do not construct paths yourself,
-   do not assume a page lives where you asked for it, and do not re-call
-   getPageHtml to find a file. If a path seems missing, glob for it.
-   Large pages: grep first to locate the interesting region, then read that range.
-   Small pages: read them whole.
+3. Call getPageHtml with those URLs. Each page includes url, title, html, and
+   truncated. Analyze the HTML directly from the tool result. When truncated is
+   true, only the first 24,000 characters are available; work with that content.
 
 4. From each page, extract what belongs on a homepage:
    - headlines, articles, posts, product announcements, releases
@@ -49,7 +40,8 @@ You have four capabilities:
    A page that failed with reason "blocked by the user's settings" must not be requested again or worked around.
    Work with what came back; do not silently pretend a failed page succeeded.
 
-6. Write a single React component to ${OUTPUT_PATH} using the write tool.
+6. Call submitHomepage with the full React component source in source. If the
+   tool returns an error, correct the component and submit it again.
 
 ## The component contract
 
@@ -72,8 +64,7 @@ what is genuinely new or time-sensitive. Call out upcoming dates or events you
 noticed. Be opinionated. A homepage that looks like every other homepage has
 failed at its only job.
 
-When you have written the file, reply with a two-sentence summary of what you
-built and why. Do not paste the component source into your reply.`;
+Finish by calling submitHomepage, not by replying with component source.`;
 
 export interface KickoffInput {
   now: Date;
@@ -106,7 +97,7 @@ export function buildKickoffMessage({ now, userSystemPrompt }: KickoffInput): st
       ? `\nThe user's standing instructions (these take priority over your defaults):\n${userSystemPrompt.trim()}`
       : ``,
     ``,
-    `Start with getHistory, then scrape, then write ${OUTPUT_PATH}.`,
+    `Start with getHistory, then getPageHtml, then submitHomepage with the full component source.`,
   ]
     .filter(Boolean)
     .join("\n");

@@ -12,10 +12,10 @@ export default defineConfig({
       "scripting", //     getPageHtml: inject the scraper into loaded pages
       "webRequest", //    getPageHtml: the address each scraped page was served from (observe only)
       "storage", //       API key, settings, the built homepage
-      "alarms", //        heartbeat: scheduled rebuilds + reattach after a worker kill
+      "alarms", //        heartbeat: scheduled rebuilds while the browser is open
       "notifications", // surface a failed headless rebuild when no tab is open
     ],
-    // Needed to scrape arbitrary pages; also exempts api.anthropic.com from CORS.
+    // Needed to scrape arbitrary pages and to call the configured API origin.
     host_permissions: ["<all_urls>"],
   },
 });

@@ -26,23 +26,8 @@ export interface GetHistoryResult {
   sites: SiteDigest[];
 }
 
-/** A page whose HTML now lives in the session sandbox rather than in context. */
-export interface PageRef {
-  url: string;
-  title: string;
-  /**
-   * The path the sandbox actually resolved, read back off the `resources.add()`
-   * response. Never the path we asked for — the API re-roots every file resource
-   * under `/mnt/session/uploads/`, so a requested `/workspace/x.html` lands at
-   * `/mnt/session/uploads/workspace/x.html`.
-   */
-  mountPath: string;
-  /** Lets the model choose grep-first over read-whole. */
-  bytes: number;
-}
-
 export interface GetPageHtmlResult {
-  pages: PageRef[];
+  pages: Array<{ url: string; title: string; html: string; truncated: boolean }>;
   /** Surfaced, never swallowed: partial failure is information the model needs. */
   failed: Array<{ url: string; reason: string }>;
 }
@@ -69,10 +54,7 @@ export interface ScrapedPage {
   html: string;
 }
 
-/**
- * The two capabilities only a real browser has. Everything else the agent needs
- * (a filesystem, grep, read) is supplied by the session sandbox.
- */
+/** The two capabilities supplied by the host browser. */
 export interface BrowserBridge {
   getHistory(args: {
     daysToAnalyze: number;
@@ -85,35 +67,22 @@ export interface BrowserBridge {
   }): Promise<{ pages: ScrapedPage[]; failed: Array<{ url: string; reason: string }> }>;
 }
 
-/** Minimal persistence. `chrome.storage.local` in the extension, a JSON file in Node. */
-export interface KVStore {
-  get<T>(key: string): Promise<T | undefined>;
-  set(key: string, value: unknown): Promise<void>;
-  remove(key: string): Promise<void>;
-}
-
 export type RunPhase =
   | "setup"
-  | "session-create"
-  | "thinking"
   | "history"
   | "scraping"
   | "analyzing"
   | "writing"
-  | "cleanup"
   | "done"
   | "error";
 
 export interface RunCallbacks {
   onPhase?(phase: RunPhase, detail?: string): void;
-  /** Streamed assistant prose, for a progress panel. */
+  /** Assistant narration, for a progress panel. */
   onText?(text: string): void;
   onLog?(line: string): void;
 }
 
 export interface HomepageBuildResult {
   code: string;
-  sessionId: string;
-  /** Where the code came from: a session output file, or a fenced block in the final message. */
-  source: "session-output" | "message-fence";
 }

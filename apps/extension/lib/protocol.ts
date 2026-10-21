@@ -37,7 +37,7 @@ export const LOG_RETENTION = 40;
 // page → worker
 export type PageMsg =
   | { kind: "subscribe" } //                    → replies with a snapshot
-  | { kind: "startBuild"; resume?: boolean } // no-op if one is already running
+  | { kind: "startBuild" } // no-op if one is already running
   | { kind: "cancel" };
 
 // worker → page (broadcast to every connected tab)
@@ -49,18 +49,13 @@ export type BuildMsg =
   | { kind: "done"; code: string } // homepage saved; carries the raw TSX
   | { kind: "error"; message: string };
 
-/**
- * The five stages a person cares about. The agent emits finer-grained phases
- * that interleave (thinking ↔ analyzing fire repeatedly); each maps to a step
- * here. `thinking` and `error` deliberately map to none, so they never move the
- * stepper.
- */
+/** Repeated phases map to the same step; errors leave the stepper where it was. */
 export const BUILD_STEPS: { label: string; phases: RunPhase[] }[] = [
-  { label: "Preparing agent", phases: ["setup", "session-create"] },
+  { label: "Preparing agent", phases: ["setup"] },
   { label: "Reading your history", phases: ["history"] },
   { label: "Opening pages in your browser", phases: ["scraping"] },
   { label: "Analyzing pages", phases: ["analyzing"] },
-  { label: "Writing your homepage", phases: ["writing", "cleanup", "done"] },
+  { label: "Writing your homepage", phases: ["writing", "done"] },
 ];
 
 /** Which step a phase belongs to, or `undefined` if it shouldn't move the stepper. */

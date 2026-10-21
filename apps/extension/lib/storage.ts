@@ -1,11 +1,4 @@
-import {
-  DEFAULT_MODEL,
-  DEFAULT_BLOCKED_SITES,
-  MODEL_CHOICES,
-  STORAGE_KEYS as AGENT_KEYS,
-  type HomepageModel,
-  type KVStore,
-} from "@homepage/agent-core";
+import { DEFAULT_BLOCKED_SITES } from "@homepage/agent-core";
 
 /**
  * Everything the extension persists, in one place. All of it lives in
@@ -14,7 +7,8 @@ import {
  * distribute (see ARCHITECTURE.md → Privacy).
  */
 export const KEYS = {
-  ...AGENT_KEYS,
+  baseUrl: "baseUrl",
+  apiKey: "apiKey",
   homepage: "homepageData",
   systemPrompt: "systemPrompt",
   blockedSites: "blockedSites",
@@ -34,16 +28,16 @@ export interface Homepage {
 }
 
 export interface Settings {
+  baseUrl: string;
   apiKey: string | null;
   systemPrompt: string;
   blockedSites: string[];
-  model: HomepageModel;
+  model: string;
   /** Unset means on — auto-rebuild is opt-out. */
   autoRebuild: boolean;
 }
 
-/** The `KVStore` agent-core persists its agent/environment/session IDs through. */
-export const extensionStore: KVStore = {
+export const extensionStore = {
   async get<T>(key: string): Promise<T | undefined> {
     const result = await browser.storage.local.get(key);
     return result[key] as T | undefined;
@@ -58,24 +52,24 @@ export const extensionStore: KVStore = {
 
 export async function loadSettings(): Promise<Settings> {
   const s = await browser.storage.local.get([
+    KEYS.baseUrl,
     KEYS.apiKey,
     KEYS.systemPrompt,
     KEYS.blockedSites,
     KEYS.model,
     KEYS.autoRebuild,
   ]);
-  const model = s[KEYS.model] as string | undefined;
   return {
+    baseUrl: (s[KEYS.baseUrl] as string | undefined) ?? "",
     apiKey: (s[KEYS.apiKey] as string | undefined) ?? null,
     systemPrompt: (s[KEYS.systemPrompt] as string | undefined) ?? "",
     blockedSites: (s[KEYS.blockedSites] as string[] | undefined) ?? [...DEFAULT_BLOCKED_SITES],
-    // Fall back if a stored model is no longer offered.
-    model: MODEL_CHOICES.find((m) => m.id === model)?.id ?? DEFAULT_MODEL,
+    model: (s[KEYS.model] as string | undefined) ?? "",
     autoRebuild: s[KEYS.autoRebuild] !== false,
   };
 }
 
-export async function saveSetting<K extends "apiKey" | "systemPrompt" | "blockedSites" | "model" | "autoRebuild">(
+export async function saveSetting<K extends keyof Settings>(
   key: K,
   value: Settings[K],
 ): Promise<void> {
