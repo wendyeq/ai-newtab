@@ -43,22 +43,26 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
   const { baseUrl, apiKey, model, bridge, callbacks, signal } = opts;
   callbacks?.onPhase?.("setup");
 
+  const trimmedBaseUrl = baseUrl.trim();
+  const baseUrlError = "baseUrl must be an http or https URL without userinfo";
   let endpoint: URL;
   try {
-    endpoint = new URL(baseUrl.trim());
+    endpoint = new URL(trimmedBaseUrl);
   } catch {
-    throw new Error("baseUrl must be an http or https URL without userinfo");
+    throw new Error(baseUrlError);
   }
   if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
-    throw new Error("baseUrl must be an http or https URL without userinfo");
+    throw new Error(baseUrlError);
   }
   if (!model.trim()) throw new Error("model must be nonempty");
   if (!apiKey.trim()) throw new Error("apiKey must be nonempty");
+  const completionsUrl = `${trimmedBaseUrl.replace(/\/+$/, "")}/chat/completions`;
 
   const redact = (text: string) => text.split(apiKey).join("[redacted]");
-  const readBlockedSites = async () => normalizeBlockList(
-    (typeof opts.blockedSites === "function" ? await opts.blockedSites() : opts.blockedSites) ?? DEFAULT_BLOCKED_SITES,
-  );
+  const readBlockedSites = async () => {
+    const listed = typeof opts.blockedSites === "function" ? await opts.blockedSites() : opts.blockedSites;
+    return normalizeBlockList(listed ?? DEFAULT_BLOCKED_SITES);
+  };
   let code: string | undefined;
 
   const registry: Record<string, Tool> = {
@@ -104,6 +108,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
           : { pages: [], failed: [] };
         const currentBlockedSites = await readBlockedSites();
         const pages: GetPageHtmlResult["pages"] = [];
+        const htmlLimit = 24_000;
         for (const page of loaded.pages) {
           if (!isAllowedUrl(page.finalUrl ?? page.url, currentBlockedSites) || (page.ip && isPrivateAddress(page.ip))) {
             failed.push({ url: page.url, reason: "blocked by the user's settings" });
@@ -112,8 +117,8 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
           pages.push({
             url: page.url,
             title: page.title,
-            html: page.html.slice(0, 24_000),
-            truncated: page.html.length > 24_000,
+            html: page.html.slice(0, htmlLimit),
+            truncated: page.html.length > htmlLimit,
           });
         }
         return { pages, failed: [...failed, ...loaded.failed] };
@@ -153,7 +158,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
   for (let turn = 0; turn < 16; turn++) {
     if (signal?.aborted) throw new Error("aborted");
     callbacks?.onPhase?.("analyzing");
-    const response = await fetch(`${baseUrl.trim().replace(/\/+$/, "")}/chat/completions`, {
+    const response = await fetch(completionsUrl, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model, messages, tools, stream: false }),

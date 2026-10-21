@@ -31,6 +31,11 @@ async function runTools(
   const logs: string[] = [];
   let requests = 0;
   const source = 'import React from "react"; export default function PersonalizedHomepage() { return <main />; }';
+  const steps = [
+    { id: "history", name: "getHistory", input: { maxResults: 1 } },
+    { id: "pages", name: "getPageHtml", input: { urls } },
+    { id: "submit", name: "submitHomepage", input: { source } },
+  ];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -44,11 +49,7 @@ async function runTools(
         results.push(last);
         if (last.tool_call_id === "history") afterHistory?.();
       }
-      const next = requests === 1
-        ? { id: "history", name: "getHistory", input: { maxResults: 1 } }
-        : requests === 2
-          ? { id: "pages", name: "getPageHtml", input: { urls } }
-          : { id: "submit", name: "submitHomepage", input: { source } };
+      const next = steps[requests - 1] ?? steps[2]!;
       return Response.json({ choices: [{ message: {
         role: "assistant",
         content: null,

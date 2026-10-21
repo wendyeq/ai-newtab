@@ -14,6 +14,11 @@ const pageHtml = "<main><h1>Hacker News</h1><p>bridge-page-body</p></main>";
 test("runs history, page HTML, and submitHomepage as chat completions", async () => {
   const sites = fixtureHistory();
   const seen: Array<{ authorization: string | null; pathname: string; method: string; messages: Array<{ role: string; tool_call_id?: string; content?: string }> }> = [];
+  const turns = [
+    { id: "h-1", name: "getHistory", arguments: "{}" },
+    { id: "p-2", name: "getPageHtml", arguments: JSON.stringify({ urls: ["https://news.ycombinator.com/"] }) },
+    { id: "s-3", name: "submitHomepage", arguments: JSON.stringify({ source: "```tsx\n" + source + "\n```" }) },
+  ];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -26,12 +31,7 @@ test("runs history, page HTML, and submitHomepage as chat completions", async ()
         method: request.method,
         messages: body.messages,
       });
-      const turn = seen.length;
-      const call = turn === 1
-        ? { id: "h-1", name: "getHistory", arguments: "{}" }
-        : turn === 2
-          ? { id: "p-2", name: "getPageHtml", arguments: JSON.stringify({ urls: ["https://news.ycombinator.com/"] }) }
-          : { id: "s-3", name: "submitHomepage", arguments: JSON.stringify({ source: "```tsx\n" + source + "\n```" }) };
+      const call = turns[seen.length - 1] ?? turns[2]!;
       return Response.json({
         choices: [{
           message: {

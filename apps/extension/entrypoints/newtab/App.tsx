@@ -64,20 +64,20 @@ export default function App() {
   }, []);
 
   const savePrompt = useCallback(
-    async (prompt: string, sites: string[], nextBaseUrl: string, nextModel: string, nextApiKey: string) => {
+    async (next: { prompt: string; blockedSites: string[]; baseUrl: string; model: string; apiKey: string }) => {
       const writes = [
-        saveSetting("systemPrompt", prompt),
-        saveSetting("blockedSites", sites),
-        saveSetting("baseUrl", nextBaseUrl),
-        saveSetting("model", nextModel),
+        saveSetting("systemPrompt", next.prompt),
+        saveSetting("blockedSites", next.blockedSites),
+        saveSetting("baseUrl", next.baseUrl),
+        saveSetting("model", next.model),
       ];
-      if (nextApiKey) writes.push(saveSetting("apiKey", nextApiKey));
+      if (next.apiKey) writes.push(saveSetting("apiKey", next.apiKey));
       await Promise.all(writes);
-      setBaseUrl(nextBaseUrl);
-      setModel(nextModel);
-      if (nextApiKey) setApiKey(nextApiKey);
-      setBlockedSites(sites);
-      setSystemPrompt(prompt);
+      setBaseUrl(next.baseUrl);
+      setModel(next.model);
+      if (next.apiKey) setApiKey(next.apiKey);
+      setBlockedSites(next.blockedSites);
+      setSystemPrompt(next.prompt);
       setShowSettings(false);
       setRenderedCode(null);
       build();

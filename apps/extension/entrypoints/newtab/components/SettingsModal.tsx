@@ -19,13 +19,22 @@ export function SettingsModal({
   autoRebuild: boolean;
   onToggleAutoRebuild: (next: boolean) => void;
   onClose: () => void;
-  onSave: (prompt: string, blockedSites: string[], baseUrl: string, model: string, apiKey: string) => void;
+  onSave: (next: { prompt: string; blockedSites: string[]; baseUrl: string; model: string; apiKey: string }) => void;
 }) {
   const [draft, setDraft] = useState(initialPrompt);
   const [blockedDraft, setBlockedDraft] = useState(blockedSites.join("\n"));
   const [baseUrlDraft, setBaseUrlDraft] = useState(baseUrl);
   const [modelDraft, setModelDraft] = useState(model);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const fieldStyle = {
+    width: "100%",
+    boxSizing: "border-box" as const,
+    marginTop: 8,
+    padding: "8px 12px",
+    fontSize: 14,
+    borderRadius: 4,
+    border: "1px solid #ddd",
+  };
 
   return (
     <div
@@ -76,7 +85,7 @@ export function SettingsModal({
             value={baseUrlDraft}
             onChange={(e) => setBaseUrlDraft(e.target.value)}
             placeholder="https://gate.wendyeq.top/v1"
-            style={{ width: "100%", boxSizing: "border-box", marginTop: 8, padding: "8px 12px", fontSize: 14, borderRadius: 4, border: "1px solid #ddd" }}
+            style={fieldStyle}
           />
         </label>
         <label style={{ display: "block", marginTop: 16, color: "#333", fontSize: 14 }}>
@@ -87,7 +96,7 @@ export function SettingsModal({
             onChange={(e) => setApiKeyDraft(e.target.value)}
             placeholder="Leave blank to keep the saved key"
             autoComplete="off"
-            style={{ width: "100%", boxSizing: "border-box", marginTop: 8, padding: "8px 12px", fontSize: 14, borderRadius: 4, border: "1px solid #ddd" }}
+            style={fieldStyle}
           />
         </label>
         <label style={{ display: "block", marginTop: 16, color: "#333", fontSize: 14 }}>
@@ -96,7 +105,7 @@ export function SettingsModal({
             type="text"
             value={modelDraft}
             onChange={(e) => setModelDraft(e.target.value)}
-            style={{ width: "100%", boxSizing: "border-box", marginTop: 8, padding: "8px 12px", fontSize: 14, borderRadius: 4, border: "1px solid #ddd" }}
+            style={fieldStyle}
           />
         </label>
         <label
@@ -130,7 +139,13 @@ export function SettingsModal({
           </button>
           <button
             disabled={!baseUrlDraft.trim() || !modelDraft.trim()}
-            onClick={() => onSave(draft, normalizeBlockList(blockedDraft.split("\n")), baseUrlDraft.trim(), modelDraft.trim(), apiKeyDraft.trim())}
+            onClick={() => onSave({
+              prompt: draft,
+              blockedSites: normalizeBlockList(blockedDraft.split("\n")),
+              baseUrl: baseUrlDraft.trim(),
+              model: modelDraft.trim(),
+              apiKey: apiKeyDraft.trim(),
+            })}
             style={btn}
           >
             Save &amp; rebuild
