@@ -132,14 +132,10 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
         required: ["source"],
       },
       async run(input) {
-        const source = typeof input.source === "string" ? stripFence(input.source) : "";
-        if (
-          !source.includes("PersonalizedHomepage") ||
-          !/(?:from\s*["']react["']|import\s+React\b)/.test(source) ||
-          source.includes(apiKey)
-        ) {
-          return { error: "source must be a PersonalizedHomepage React component" };
-        }
+        const raw = typeof input.source === "string" ? input.source : "";
+        const source = prepareHomepageSource(raw);
+        const error = homepageSourceError(source, apiKey);
+        if (error) return { error };
         code = source;
         callbacks?.onPhase?.("writing");
         return { accepted: true };
@@ -154,6 +150,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
     { role: "system", content: HOMEPAGE_SYSTEM_PROMPT },
     { role: "user", content: buildKickoffMessage({ now: opts.now ?? new Date(), userSystemPrompt: opts.userSystemPrompt }) },
   ];
+  let plainReplyNudges = 0;
 
   for (let turn = 0; turn < 16; turn++) {
     if (signal?.aborted) throw new Error("aborted");
@@ -174,7 +171,17 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
       ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
     };
     messages.push(assistant);
-    if (!assistant.tool_calls?.length) throw new Error("the model stopped without submitHomepage");
+    if (!assistant.tool_calls?.length) {
+      const action = plainReplyAction(assistant.content, apiKey, plainReplyNudges);
+      if (action.type === "accept") {
+        callbacks?.onPhase?.("writing");
+        return { code: action.source };
+      }
+      if (action.type === "stop") throw new Error("the model stopped without submitHomepage");
+      plainReplyNudges += 1;
+      messages.push({ role: "user", content: action.message });
+      continue;
+    }
 
     for (const call of assistant.tool_calls) {
       if (signal?.aborted) throw new Error("aborted");
@@ -240,8 +247,64 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
-function stripFence(text: string): string {
+const MAX_PLAIN_REPLY_NUDGES = 2;
+const SUBMIT_NUDGE = "只调用 submitHomepage，把完整源码放进 source";
+const REACT_IMPORT = /(?:from\s*["']react(?:\/[^"']*)?["']|import\s+React\b)/;
+
+function plainReplyAction(
+  content: string | null,
+  secret: string,
+  nudgesUsed: number,
+): { type: "accept"; source: string } | { type: "nudge"; message: string } | { type: "stop" } {
+  const source = prepareHomepageSource(content ?? "");
+  const looksLike = looksLikeHomepageSource(source);
+  const error = looksLike ? homepageSourceError(source, secret) : null;
+  if (looksLike && !error) return { type: "accept", source };
+  if (nudgesUsed >= MAX_PLAIN_REPLY_NUDGES) return { type: "stop" };
+  return { type: "nudge", message: error ? `${error}\n${SUBMIT_NUDGE}` : SUBMIT_NUDGE };
+}
+
+function homepageSourceError(source: string, secret: string): string | null {
+  const problems: string[] = [];
+  if (!source.includes("PersonalizedHomepage")) problems.push("missing PersonalizedHomepage");
+  if (!REACT_IMPORT.test(source)) problems.push("missing react import");
+  if (secret.length > 0 && source.includes(secret)) problems.push("contains the API key");
+  if (!problems.length) return null;
+  return `source rejected: ${problems.join("; ")}`;
+}
+
+function looksLikeHomepageSource(source: string): boolean {
+  return /(?:function|class|const|let|var)\s+PersonalizedHomepage\b|\bPersonalizedHomepage\s*=/.test(source);
+}
+
+function prepareHomepageSource(raw: string): string {
+  return sliceToCode(extractFenced(raw) ?? raw).trim();
+}
+
+function extractFenced(text: string): string | null {
   const trimmed = text.trim();
-  const fenced = trimmed.match(/^```[^\r\n`]*\r?\n([\s\S]*?)\r?\n?```$/);
-  return (fenced ? fenced[1] : trimmed).trim();
+  const open = /```[^\r\n`]*\r?\n/.exec(trimmed);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  const end = trimmed.lastIndexOf("```");
+  if (end < start) return trimmed.slice(start).trim();
+  return trimmed.slice(start, end).trim();
+}
+
+function sliceToCode(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let start = 0;
+  while (start < lines.length && !codeLine(lines[start] ?? "")) start += 1;
+  if (start === lines.length) return text.trim();
+  let end = lines.length - 1;
+  while (end > start && !codeLine(lines[end] ?? "")) end -= 1;
+  return lines.slice(start, end + 1).join("\n");
+}
+
+function codeLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("```")) return false;
+  return /^(?:import\b|export\b|function\b|const\b|let\b|var\b|class\b|return\b|if\b|for\b|while\b|switch\b|type\b|interface\b|\/\/|\/\*|\*\/|[{}();<])/.test(trimmed)
+    || trimmed.includes("PersonalizedHomepage")
+    || trimmed.includes("=>");
 }
