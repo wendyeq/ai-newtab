@@ -17,5 +17,11 @@ export default defineConfig({
     ],
     // Needed to scrape arbitrary pages and to call the configured API origin.
     host_permissions: ["<all_urls>"],
+    // target=_blank from the generated page must escape the sandbox. Chrome
+    // forbids allow-same-origin here; the default policy omits the escape token.
+    content_security_policy: {
+      sandbox:
+        "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; child-src 'self';",
+    },
   },
 });
