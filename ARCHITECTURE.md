@@ -50,9 +50,10 @@ build state, then streams phase/text/log deltas. Every open tab shows the same l
 run. A throttled snapshot is also mirrored to storage so a tab opened while the
 worker is asleep paints instantly.
 
-The finished component renders inside a Sandpack iframe
-(`entrypoints/newtab/components/HomepagePreview.tsx`): it is model-written code, so
-it runs sandboxed, not in the extension's own page.
+The finished component renders inside the extension's sandbox page
+(`entrypoints/sandbox/`, framed by `entrypoints/newtab/components/HomepagePreview.tsx`):
+it is model-written code, so it runs sandboxed and offline, not in the extension's own
+page. Links open in a new tab, since most sites refuse to be framed.
 
 ## Layout
 

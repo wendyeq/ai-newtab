@@ -51,7 +51,8 @@ You have three tools:
 - Inline styles or a style object. No styled-components, no Tailwind, no
   external stylesheet.
 - Every link must be a real absolute URL taken from the scraped content. Never
-  invent a URL, never leave an \`href="#"\` placeholder.
+  invent a URL, never leave an \`href="#"\` placeholder. Give every link
+  \`target="_blank" rel="noreferrer"\`.
 - Responsive, light background only. Do not add a theme switch or a dark palette. Hover states and transitions are fine.
 - Emoji are fine as category markers; icon libraries are not.
 
