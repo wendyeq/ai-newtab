@@ -127,8 +127,8 @@ export function SettingsModal({
           Rebuild automatically each morning
         </label>
         <p style={{ color: "#888", fontSize: 12, margin: "6px 0 0" }}>
-          When on, the extension builds one morning edition a day in the background (first time
-          Chrome is open between 5am and noon), so your next tab shows a fresh one (uses your API key).
+          When on, the extension builds one edition a day in the background (first time
+          Chrome is open after 5am), so your next tab shows a fresh one (uses your API key).
         </p>
         <div style={{ display: "flex", gap: 12, marginTop: 20, justifyContent: "flex-end" }}>
           <button

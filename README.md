@@ -89,10 +89,9 @@ expects. Both are free text, and you can change them later in Settings. They
 take effect from your next build.
 
 **Rebuild automatically each morning.** On by default. The extension builds one
-morning edition a day, quietly in the background, the first time Chrome is open
-between 5am and noon. If Chrome isn't open that morning, the day is skipped. It
-only starts after you've built once by hand, and it tries at most once per
-morning, so it never loops.
+edition a day, quietly in the background, the first time Chrome is open after
+5am. It only starts after you've built once by hand, and it tries at most once
+per day, so it never loops.
 
 **↻ Rebuild** in the top-right corner rebuilds right away.
 

@@ -19,12 +19,13 @@ describe("shouldAutoRebuild", () => {
     expect(shouldAutoRebuild(input({}))).toBe(true);
   });
 
-  test("never builds outside the morning window", () => {
-    for (const hour of [0, 4, 12, 15, 18, 21, 23]) {
+  test("never builds before 5am, but builds any time at or after 5am", () => {
+    for (const hour of [0, 4]) {
       expect(shouldAutoRebuild(input({ now: at(hour) }))).toBe(false);
     }
-    expect(shouldAutoRebuild(input({ now: at(5) }))).toBe(true);
-    expect(shouldAutoRebuild(input({ now: at(11, 59) }))).toBe(true);
+    for (const hour of [5, 11, 12, 15, 18, 21, 23]) {
+      expect(shouldAutoRebuild(input({ now: at(hour) }))).toBe(true);
+    }
   });
 
   test("builds only once per morning", () => {

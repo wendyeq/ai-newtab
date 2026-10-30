@@ -14,7 +14,10 @@ export default defineBackground(() => {
   const manager = new BuildManager();
 
   browser.runtime.onConnect.addListener((port) => {
-    if (port.name === AGENT_PORT) manager.attach(port);
+    if (port.name === AGENT_PORT) {
+      manager.attach(port);
+      void manager.tick();
+    }
   });
 
   // ~1 min is the chrome.alarms floor.

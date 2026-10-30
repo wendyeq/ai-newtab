@@ -1,12 +1,11 @@
 /**
- * Auto-rebuild policy, evaluated by the worker's alarm heartbeat: one morning
- * edition a day. The first heartbeat inside the morning window rebuilds
- * headlessly, so the next new tab already shows today's homepage.
+ * Auto-rebuild policy, evaluated by the worker's alarm heartbeat: one edition
+ * a day. The first heartbeat at or after 5am rebuilds headlessly, so the next
+ * new tab already shows today's homepage.
  */
 
-/** Local hours (inclusive start, exclusive end) when the morning edition may build. */
-export const MORNING_START_HOUR = 5;
-export const MORNING_END_HOUR = 12;
+/** Local hour when the new day's auto-rebuild window opens. */
+export const DAY_START_HOUR = 5;
 
 export interface AutoRebuildInput {
   enabled: boolean;
@@ -23,10 +22,11 @@ export interface AutoRebuildInput {
  * Conservative by design:
  * - Never fires before the first manual build, so nothing spends on the API
  *   before the user has engaged.
- * - Only fires in the morning window. A missed morning is skipped, not caught
- *   up later in the day; the user can always rebuild by hand.
- * - At most one attempt per morning: a build (manual or automatic) or a failed
- *   or cancelled attempt since this morning's window opened counts as today's.
+ * - Fires at or after 5am local time (so late-night browsing after midnight
+ *   doesn't kick off tomorrow's build). Opening Chrome in the afternoon or
+ *   evening still builds today's edition if nothing has run since 5am.
+ * - At most one attempt per day: a build (manual or automatic) or a failed
+ *   or cancelled attempt since today's 5am boundary counts as today's.
  */
 export function shouldAutoRebuild(input: AutoRebuildInput): boolean {
   const { enabled, hasApiKey, isRunning, lastBuildTimestamp, lastAutoAttemptTimestamp, now } = input;
@@ -34,13 +34,13 @@ export function shouldAutoRebuild(input: AutoRebuildInput): boolean {
   if (!enabled || !hasApiKey || isRunning || !lastBuildTimestamp) return false;
 
   const hour = now.getHours();
-  if (hour < MORNING_START_HOUR || hour >= MORNING_END_HOUR) return false;
+  if (hour < DAY_START_HOUR) return false;
 
-  const morningStart = new Date(now);
-  morningStart.setHours(MORNING_START_HOUR, 0, 0, 0);
-  const sinceMorningStart = (iso: string) => new Date(iso).getTime() >= morningStart.getTime();
+  const dayStart = new Date(now);
+  dayStart.setHours(DAY_START_HOUR, 0, 0, 0);
+  const sinceDayStart = (iso: string) => new Date(iso).getTime() >= dayStart.getTime();
 
-  if (sinceMorningStart(lastBuildTimestamp)) return false;
-  if (lastAutoAttemptTimestamp && sinceMorningStart(lastAutoAttemptTimestamp)) return false;
+  if (sinceDayStart(lastBuildTimestamp)) return false;
+  if (lastAutoAttemptTimestamp && sinceDayStart(lastAutoAttemptTimestamp)) return false;
   return true;
 }
