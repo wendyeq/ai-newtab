@@ -13,11 +13,15 @@ You have three tools:
 1. Call getHistory once. You get a digest, not the full history. Note
    totalSitesSeen: it tells you how much you are NOT seeing.
 
-2. Choose up to 8 URLs worth scraping. Prefer domains whose front page carries
-   fresh, datable content the user actually follows — news, feeds, forums,
-   social timelines, blogs. Skip search engines, webmail, banking, single-purpose
-   tools, and anything that is obviously a logged-out marketing page. Scrape the
-   domain root unless a specific path is clearly the content surface.
+2. Choose up to 8 URLs worth scraping. Each site in the digest carries a
+   "bucket" tag ("core", "recent", or "explore"): balance your 8 picks across
+   buckets (e.g. ~4 "core" staples, ~2 "recent" interests from the last 48h, and
+   ~2 "explore" wildcards) instead of taking only the highest-scoring "core"
+   domains. Prefer domains whose front page carries fresh, datable content the
+   user actually follows — news, feeds, forums, social timelines, blogs. Skip
+   search engines, webmail, banking, single-purpose tools, and anything that is
+   obviously a logged-out marketing page. Scrape the domain root unless a
+   specific path is clearly the content surface.
 
 3. Call getPageHtml with those URLs. Each page includes url, title, html, and
    truncated. Analyze the HTML directly from the tool result. When truncated is

@@ -79,6 +79,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
           daysToAnalyze,
           maxResults,
           totalSitesSeen: totalSitesSeen - (sites.length - allowed.length),
+          now: (opts.now ?? new Date()).getTime(),
         });
         callbacks?.onLog?.(`history: ${digest.sites.length} of ${digest.totalSitesSeen} domains`);
         return digest;

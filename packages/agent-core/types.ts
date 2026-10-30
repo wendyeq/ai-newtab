@@ -8,6 +8,8 @@
  */
 
 /** One domain's worth of browsing history, narrowed to fit in a context window. */
+export type SiteBucket = "core" | "recent" | "explore";
+
 export interface SiteDigest {
   domain: string;
   visits: number;
@@ -15,6 +17,7 @@ export interface SiteDigest {
   /** ISO 8601 — the model reasons about dates, not epoch milliseconds. */
   lastVisit: string;
   score: number;
+  bucket?: SiteBucket;
   /** Capped. `urls[]` is dropped entirely. */
   sampleTitles: string[];
 }
