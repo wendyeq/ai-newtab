@@ -20,6 +20,60 @@ body {
   }
 }
 
+/* ---- Failure that needs a person, kept until they dismiss it ---- */
+.failure-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 18px;
+  background: #7c2d12;
+  color: #fff;
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+.failure-banner.needs-attention {
+  background: #7f1d1d;
+}
+.failure-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+.failure-banner-detail,
+.failure-banner-time {
+  display: block;
+  margin-top: 4px;
+}
+.failure-banner-detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.failure-banner-time {
+  opacity: 0.8;
+  font-size: 12px;
+}
+.failure-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.failure-banner-dismiss {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 4px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.failure-banner-dismiss:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
 /* ---- Corner dock over the generated homepage: faint until hovered ---- */
 .dock {
   position: fixed;

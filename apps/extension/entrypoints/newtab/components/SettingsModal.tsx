@@ -45,7 +45,7 @@ export function SettingsModal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 1000,
+        zIndex: 1300,
       }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
@@ -124,11 +124,12 @@ export function SettingsModal({
             checked={autoRebuild}
             onChange={(e) => onToggleAutoRebuild(e.target.checked)}
           />
-          Rebuild automatically each morning
+          Rebuild automatically
         </label>
         <p style={{ color: "#888", fontSize: 12, margin: "6px 0 0" }}>
-          When on, the extension builds one edition a day in the background (first time
-          Chrome is open after 5am), so your next tab shows a fresh one (uses your API key).
+          When on, the extension rebuilds in the background once the current homepage is 6
+          hours old. A failed attempt waits 6 hours, and the error stays on the new tab
+          until you dismiss it (uses your API key). Chrome has to be open.
         </p>
         <div style={{ display: "flex", gap: 12, marginTop: 20, justifyContent: "flex-end" }}>
           <button

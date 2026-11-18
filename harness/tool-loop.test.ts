@@ -533,3 +533,56 @@ test("extracts submitHomepage source from prose and an unclosed fence", async ()
     server.stop(true);
   }
 });
+
+test("rejects uncompilable source via validateSource until the model fixes it", async () => {
+  const broken = 'import React from "react";\nexport default function PersonalizedHomepage() { return <main; }';
+  const { server, bodies, base } = serve((_request, hits) => Response.json({
+    choices: [{
+      message: {
+        content: null,
+        tool_calls: [submitCall(hits === 1 ? broken : cleanSource, hits === 1 ? "bad" : "ok")],
+      },
+    }],
+  }));
+  try {
+    const result = await runHomepageBuild({
+      baseUrl: `${base}/v1`,
+      apiKey,
+      model: "test-model",
+      bridge: bridge(),
+      validateSource: (src) => (src.includes("<main;") ? "TSX compile error: bad tag" : null),
+    });
+    expect(result.code).toBe(cleanSource);
+    expect(JSON.parse(bodies[1]!.messages.find((message) => message.tool_call_id === "bad")!.content!)).toEqual({
+      error: "TSX compile error: bad tag",
+    });
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("nudges with validateSource error when plain reply contains uncompilable source", async () => {
+  const broken = 'import React from "react";\nexport default function PersonalizedHomepage() { return <main; }';
+  const { server, bodies, base } = serve((_request, hits) => Response.json({
+    choices: [{
+      message: hits === 1
+        ? { content: broken }
+        : { content: null, tool_calls: [submitCall(cleanSource)] },
+    }],
+  }));
+  try {
+    const result = await runHomepageBuild({
+      baseUrl: `${base}/v1`,
+      apiKey,
+      model: "test-model",
+      bridge: bridge(),
+      validateSource: (src) => (src.includes("<main;") ? "TSX compile error: bad tag" : null),
+    });
+    expect(result.code).toBe(cleanSource);
+    const nudge = bodies[1]!.messages.at(-1)!;
+    expect(nudge.role).toBe("user");
+    expect(nudge.content).toContain("TSX compile error: bad tag");
+  } finally {
+    server.stop(true);
+  }
+});

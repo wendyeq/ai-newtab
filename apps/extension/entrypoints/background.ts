@@ -1,5 +1,6 @@
 import { BuildManager } from "@/lib/build-manager";
 import { AGENT_PORT } from "@/lib/protocol";
+import { FAILURE_NOTIFICATION_ID } from "@/lib/storage";
 
 /**
  * The service worker is the build host. It owns the agent loop (BuildManager),
@@ -28,6 +29,10 @@ export default defineBackground(() => {
 
   browser.runtime.onStartup.addListener(() => void manager.tick());
   browser.runtime.onInstalled.addListener(() => void manager.tick());
+  browser.notifications.onClicked.addListener((id) => {
+    if (id !== FAILURE_NOTIFICATION_ID) return;
+    void browser.tabs.create({});
+  });
 
   void manager.tick();
 });

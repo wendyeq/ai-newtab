@@ -14,11 +14,24 @@ export const KEYS = {
   blockedSites: "blockedSites",
   model: "model",
   autoRebuild: "autoRebuild",
-  /** ISO timestamp of the last auto-build *attempted* (success or not). */
+  /** ISO timestamp of the last build *attempted* (success or not). */
   lastAutoBuildAttempt: "lastAutoBuildAttempt",
   /** Throttled mirror of the live build state, for tabs that open while the worker sleeps. */
   buildSnapshot: "buildSnapshot",
+  /** Last failure still waiting for the user. Cleared on success or dismiss. */
+  lastBuildFailure: "lastBuildFailure",
 } as const;
+
+/** Stable id so a new failure replaces the previous notification instead of stacking. */
+export const FAILURE_NOTIFICATION_ID = "homepage-build-failure";
+
+export interface BuildFailure {
+  message: string;
+  /** ISO timestamp of when this failure was recorded. */
+  at: string;
+  /** False when the build was only interrupted and will retry on its own. */
+  needsAttention: boolean;
+}
 
 export interface Homepage {
   /** The agent's raw TSX source. */
@@ -83,4 +96,16 @@ export async function loadHomepage(): Promise<Homepage | undefined> {
 export async function saveHomepage(code: string): Promise<void> {
   const homepage: Homepage = { code, timestamp: new Date().toISOString() };
   await extensionStore.set(KEYS.homepage, homepage);
+}
+
+export async function loadBuildFailure(): Promise<BuildFailure | undefined> {
+  return extensionStore.get<BuildFailure>(KEYS.lastBuildFailure);
+}
+
+export async function saveBuildFailure(failure: BuildFailure): Promise<void> {
+  await extensionStore.set(KEYS.lastBuildFailure, failure);
+}
+
+export async function clearBuildFailure(): Promise<void> {
+  await extensionStore.remove(KEYS.lastBuildFailure);
 }

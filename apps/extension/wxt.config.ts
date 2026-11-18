@@ -5,7 +5,7 @@ export default defineConfig({
   modules: ["@wxt-dev/module-react"],
   manifest: {
     name: "AI Homepage",
-    description: "A new-tab page an agent rebuilds daily from what you've actually been browsing.",
+    description: "A new-tab page an agent rebuilds from what you've actually been browsing.",
     permissions: [
       "history", //       getHistory tool
       "tabs", //          getPageHtml: open pages and watch them load
@@ -13,7 +13,7 @@ export default defineConfig({
       "webRequest", //    getPageHtml: the address each scraped page was served from (observe only)
       "storage", //       API key, settings, the built homepage
       "alarms", //        heartbeat: scheduled rebuilds while the browser is open
-      "notifications", // surface a failed headless rebuild when no tab is open
+      "notifications", // keep a failed rebuild on screen until the user deals with it
     ],
     // Needed to scrape arbitrary pages and to call the configured API origin.
     host_permissions: ["<all_urls>"],

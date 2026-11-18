@@ -88,10 +88,11 @@ example `https://gate.wendyeq.top/v1`. The model is the name that endpoint
 expects. Both are free text, and you can change them later in Settings. They
 take effect from your next build.
 
-**Rebuild automatically each morning.** On by default. The extension builds one
-edition a day, quietly in the background, the first time Chrome is open after
-5am. It only starts after you've built once by hand, and it tries at most once
-per day, so it never loops.
+**Rebuild automatically.** On by default. While Chrome is open, the extension
+rebuilds in the background once the current homepage is 6 hours old. A failed
+attempt waits 6 hours before it tries again, and the failure stays on the new
+tab — and in a system notification — until you dismiss it or a build succeeds.
+It only starts after you've built once by hand.
 
 **↻ Rebuild** in the top-right corner rebuilds right away.
 

@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { DEFAULT_BLOCKED_SITES } from "@homepage/agent-core";
 import { BUILD_STEPS } from "@/lib/protocol";
-import { loadHomepage, loadSettings, saveSetting } from "@/lib/storage";
-import { toRenderable } from "@/lib/transpile";
+import {
+  FAILURE_NOTIFICATION_ID,
+  KEYS,
+  clearBuildFailure,
+  loadBuildFailure,
+  loadHomepage,
+  loadSettings,
+  saveSetting,
+  type BuildFailure,
+} from "@/lib/storage";
+import { compileHomepage } from "@/lib/transpile";
 import { ApiKeySetup } from "./components/ApiKeySetup";
+import { BuildFailureBanner } from "./components/BuildFailureBanner";
 import { BuildProgress } from "./components/BuildProgress";
 import { HomepagePreview } from "./components/HomepagePreview";
 import { SettingsModal } from "./components/SettingsModal";
@@ -18,15 +28,28 @@ export default function App() {
   const [blockedSites, setBlockedSites] = useState<string[]>(DEFAULT_BLOCKED_SITES);
   const [model, setModel] = useState("");
   const [autoRebuild, setAutoRebuild] = useState(true);
-  /** Transpiled homepage, ready for Sandpack. */
+  /** Transpiled homepage, ready for the sandbox. */
   const [renderedCode, setRenderedCode] = useState<string | null>(null);
+  /** Real TSX compile error if a saved homepage failed to transpile. */
+  const [compileError, setCompileError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   /** Expand the full progress view over an existing homepage. */
   const [viewProgress, setViewProgress] = useState(false);
-  /** The error the user dismissed, so a stale banner doesn't linger. */
-  const [dismissedError, setDismissedError] = useState<string | null>(null);
+  /** Failure kept in storage, so it is still here after the worker restarts. */
+  const [failure, setFailure] = useState<BuildFailure | null>(null);
 
-  const { state, build, cancel } = useHomepageBuild((code) => setRenderedCode(toRenderable(code)));
+  const applyHomepageSource = useCallback((source: string) => {
+    const compiled = compileHomepage(source);
+    if (compiled.ok) {
+      setRenderedCode(compiled.code);
+      setCompileError(null);
+      return;
+    }
+    setRenderedCode(null);
+    setCompileError(compiled.error);
+  }, []);
+
+  const { state, build, cancel } = useHomepageBuild(applyHomepageSource);
 
   // Once a build finishes, drop back to the homepage view.
   useEffect(() => {
@@ -45,12 +68,12 @@ export default function App() {
         setBlockedSites(settings.blockedSites);
         setModel(settings.model);
         setAutoRebuild(settings.autoRebuild);
-        if (homepage?.code) setRenderedCode(toRenderable(homepage.code));
+        if (homepage?.code) applyHomepageSource(homepage.code);
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [applyHomepageSource]);
 
   const saveKey = useCallback(async (settings: { baseUrl: string; apiKey: string; model: string }) => {
     await Promise.all([
@@ -80,6 +103,7 @@ export default function App() {
       setSystemPrompt(next.prompt);
       setShowSettings(false);
       setRenderedCode(null);
+      setCompileError(null);
       build();
     },
     [build],
@@ -89,6 +113,33 @@ export default function App() {
     setAutoRebuild(next);
     await saveSetting("autoRebuild", next);
   }, []);
+
+  useEffect(() => {
+    let gone = false;
+    void loadBuildFailure().then((found) => {
+      if (!gone) setFailure(found ?? null);
+    });
+    const onChange = (changes: { [key: string]: { newValue?: unknown } }, area: string) => {
+      if (area !== "local" || !(KEYS.lastBuildFailure in changes)) return;
+      setFailure((changes[KEYS.lastBuildFailure]?.newValue as BuildFailure | undefined) ?? null);
+    };
+    browser.storage.onChanged.addListener(onChange);
+    return () => {
+      gone = true;
+      browser.storage.onChanged.removeListener(onChange);
+    };
+  }, []);
+
+  const dismissFailure = useCallback(() => {
+    setFailure(null);
+    void clearBuildFailure();
+    void browser.notifications.clear(FAILURE_NOTIFICATION_ID).catch(() => undefined);
+  }, []);
+
+  const failureBanner =
+    failure && !state.running ? (
+      <BuildFailureBanner failure={failure} onRetry={() => build()} onDismiss={dismissFailure} />
+    ) : null;
 
   if (loading) return <div style={{ padding: 20, textAlign: "center" }}>Loading…</div>;
   if (!baseUrl.trim() || !apiKey?.trim() || !model.trim()) return <ApiKeySetup onSave={saveKey} />;
@@ -107,27 +158,41 @@ export default function App() {
   if (!renderedCode) {
     return (
       <div style={{ maxWidth: 560, margin: "14vh auto", padding: 24, fontFamily: "system-ui" }}>
-        <h1 style={{ fontSize: 26 }}>Build your homepage</h1>
+        <h1 style={{ fontSize: 26 }}>
+          {compileError ? "Saved homepage failed to compile" : "Build your homepage"}
+        </h1>
         <p style={{ color: "#555", lineHeight: 1.6 }}>
-          The agent reads your browsing history, opens the pages you actually follow, and writes a
-          homepage from what it finds today.
+          {compileError
+            ? "The saved homepage source has a TSX syntax error and could not be compiled. Rebuild to generate a working page."
+            : "The agent reads your browsing history, opens the pages you actually follow, and writes a homepage from what it finds today."}
         </p>
-        {state.error && (
-          <div style={{ ...errorBox, margin: "16px 0", padding: 12, borderRadius: 4 }}>{state.error}</div>
+        {compileError && (
+          <pre
+            style={{
+              ...errorBox,
+              margin: "16px 0",
+              padding: 12,
+              borderRadius: 4,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {compileError}
+          </pre>
         )}
+        {failureBanner}
         <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
           <button style={btn} onClick={() => build()}>
-            Build today&apos;s homepage
+            {compileError ? "Rebuild now" : "Build today\u2019s homepage"}
           </button>
         </div>
       </div>
     );
   }
 
-  const showError = state.error && dismissedError !== state.error;
-
   return (
     <div style={{ height: "100vh", width: "100vw" }}>
+      {failureBanner}
       <div className={state.running ? "dock busy" : "dock"}>
         {state.running ? (
           // A build is running in the background (from here, another tab, or the
@@ -164,45 +229,6 @@ export default function App() {
           </svg>
         </button>
       </div>
-
-      {showError && (
-        <div
-          style={{
-            ...errorBox,
-            position: "fixed",
-            top: 20,
-            left: 20,
-            right: 20,
-            zIndex: 999,
-            padding: "10px 14px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "flex-start",
-            gap: 12,
-          }}
-        >
-          <span style={{ flex: 1 }}>
-            <b>Build failed.</b> {state.error}
-          </span>
-          <button style={{ ...btn, padding: "4px 10px", backgroundColor: "#a02620" }} onClick={() => build()}>
-            Retry
-          </button>
-          <button
-            onClick={() => setDismissedError(state.error)}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "#a02620",
-              cursor: "pointer",
-              fontSize: 16,
-              lineHeight: 1,
-            }}
-            title="Dismiss"
-          >
-            ✕
-          </button>
-        </div>
-      )}
 
       <HomepagePreview code={renderedCode} />
 

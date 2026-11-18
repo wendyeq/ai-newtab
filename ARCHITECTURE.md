@@ -40,8 +40,9 @@ wall clock waiting on the model. Three things keep it alive or bring it back:
 - **A 1-minute alarm heartbeat** calls `BuildManager.tick()`. It does not
   reattach a remote session. A worker restart drops the in-flight build; the
   last saved homepage stays.
-- **The same heartbeat** drives scheduled rebuilds (`lib/auto-rebuild.ts`), so the
-  first new tab of the day already shows a fresh homepage.
+- **The same heartbeat** drives scheduled rebuilds (`lib/auto-rebuild.ts`). A
+  homepage older than 6 hours is rebuilt while Chrome is open. A failed attempt
+  waits 6 hours, and the error stays stored until the user dismisses it.
 
 ### Tabs are views
 

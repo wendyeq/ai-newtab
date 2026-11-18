@@ -1,5 +1,5 @@
 import { credentialNeedle, runHomepageBuild, type RunPhase } from "@homepage/agent-core";
-import { shouldAutoRebuild } from "./auto-rebuild";
+import { REBUILD_AFTER_HOURS, shouldAutoRebuild } from "./auto-rebuild";
 import { browserBridge } from "./browser-bridge";
 import {
   INITIAL_BUILD_STATE,
@@ -10,7 +10,18 @@ import {
   type PageMsg,
 } from "./protocol";
 import { armProxyProbe } from "./scraper";
-import { KEYS, extensionStore, loadHomepage, loadSettings, saveHomepage } from "./storage";
+import {
+  FAILURE_NOTIFICATION_ID,
+  KEYS,
+  clearBuildFailure,
+  extensionStore,
+  loadBuildFailure,
+  loadHomepage,
+  loadSettings,
+  saveBuildFailure,
+  saveHomepage,
+} from "./storage";
+import { validateHomepageTsx } from "./transpile";
 
 type Port = Parameters<Parameters<typeof browser.runtime.onConnect.addListener>[0]>[0];
 
@@ -87,12 +98,27 @@ export class BuildManager {
       return;
     }
 
-    await this.clearStaleRunningSnapshot();
-    await this.maybeAutoRebuild();
+    const interrupted = await this.clearStaleRunningSnapshot();
+    await this.surfaceStoredError();
+    const started = await this.maybeAutoRebuild();
+    if (interrupted && !started) {
+      const settings = await loadSettings();
+      const willRetry = settings.autoRebuild && Boolean(settings.baseUrl && settings.apiKey && settings.model);
+      const message = willRetry
+        ? "The build stopped before it finished. It will retry " +
+          REBUILD_AFTER_HOURS +
+          " hours after it started. Rebuild now if you want it sooner."
+        : "The build stopped before it finished. Automatic rebuild is off, so it stays stopped until you rebuild.";
+      await this.recordFailure(message, {
+        stampAttempt: false,
+        title: "Homepage build stopped",
+        needsAttention: false,
+      });
+    }
   }
 
-  /** Whether opening the day's first tab should already show a fresh homepage. */
-  private async maybeAutoRebuild() {
+  /** True when a rebuild was started. */
+  private async maybeAutoRebuild(): Promise<boolean> {
     const [settings, homepage, lastAttempt] = await Promise.all([
       loadSettings(),
       loadHomepage(),
@@ -110,13 +136,15 @@ export class BuildManager {
         now,
       })
     ) {
-      return;
+      return false;
     }
 
-    // Stamp the attempt before starting so a second wake (or a cancel/failure)
-    // doesn't re-trigger it this morning.
+    // Stamp the attempt before starting. A killed worker never reaches the
+    // failure path, and this stops the next heartbeat from starting another one
+    // before 6 hours have passed.
     await extensionStore.set(KEYS.lastAutoBuildAttempt, now.toISOString());
     void this.startBuild();
+    return true;
   }
 
   // ---- the build -----------------------------------------------------------
@@ -136,14 +164,19 @@ export class BuildManager {
     let apiKey: string | null = null;
     let apiBase = "";
     try {
+      // Manual builds stamp here too. A cancel or a kill then waits 6 hours
+      // instead of the next heartbeat starting another one immediately.
+      await extensionStore.set(KEYS.lastAutoBuildAttempt, new Date().toISOString());
+      await this.clearFailureNotice();
+
       const settings = await loadSettings();
       const { baseUrl, systemPrompt, model } = settings;
       apiKey = settings.apiKey;
       apiBase = baseUrl;
       if (!baseUrl.trim() || !apiKey?.trim() || !model.trim()) {
-        const message = "Missing base URL, API key, or model. Complete your API settings and try again.";
-        this.state = { ...INITIAL_BUILD_STATE, phase: "error", error: message };
-        this.broadcast({ kind: "error", message });
+        await this.recordFailure(
+          "Missing base URL, API key, or model. Complete your API settings and try again.",
+        );
         return;
       }
 
@@ -160,6 +193,7 @@ export class BuildManager {
         bridge: browserBridge,
         userSystemPrompt: systemPrompt,
         blockedSites: async () => (await loadSettings()).blockedSites,
+        validateSource: validateHomepageTsx,
         signal: this.controller.signal,
         callbacks: {
           onPhase: (phase, detail) => this.onPhase(phase, detail),
@@ -170,6 +204,7 @@ export class BuildManager {
 
       // Persist the raw TSX; the page transpiles it for preview.
       await saveHomepage(result.code);
+      await this.clearFailureNotice();
 
       this.state = { ...this.state, running: false, phase: "done" };
       this.broadcast({ kind: "done", code: result.code });
@@ -179,10 +214,13 @@ export class BuildManager {
       const raw = error instanceof Error ? error.message : String(error);
       const needle = apiKey ? credentialNeedle(apiBase, apiKey) : "";
       const message = needle ? raw.split(needle).join("[redacted]") : raw;
-      this.state = { ...this.state, running: false, phase: "error", error: message };
-      this.broadcast({ kind: "error", message });
-      await this.mirror(true);
-      this.notifyFailure(message);
+      if (message === "aborted") {
+        this.state = { ...INITIAL_BUILD_STATE };
+        this.broadcast({ kind: "snapshot", state: this.state });
+        await this.mirror(true);
+        return;
+      }
+      await this.recordFailure(message);
       console.error("[BuildManager] build failed", message);
     } finally {
       this.running = false;
@@ -223,11 +261,12 @@ export class BuildManager {
   }
 
   // A killed worker never reaches the build's catch, so storage can still say running.
-  private async clearStaleRunningSnapshot() {
-    if (this.running || this.controller) return;
+  private async clearStaleRunningSnapshot(): Promise<boolean> {
+    if (this.running || this.controller) return false;
     const snap = await extensionStore.get<BuildState>(KEYS.buildSnapshot);
-    if (this.running || this.controller || !snap?.running) return;
+    if (this.running || this.controller || !snap?.running) return false;
     await this.publishIdle();
+    return true;
   }
 
   private async publishIdle() {
@@ -288,19 +327,58 @@ export class BuildManager {
 
   // ---- failure surfacing ---------------------------------------------------
 
-  private notifyFailure(message: string) {
-    // Only ping when nobody is watching — an open tab already shows the error
-    // inline. A headless daily build that fails otherwise vanishes silently.
-    if (this.ports.size > 0) return;
+  /** A failure from before this notice existed still sits on the build snapshot. */
+  private async surfaceStoredError() {
+    if (await loadBuildFailure()) return;
+    const snap = await extensionStore.get<BuildState>(KEYS.buildSnapshot);
+    if (!snap?.error || snap.running || snap.error === "aborted") return;
+    const at = (await extensionStore.get<string>(KEYS.lastAutoBuildAttempt)) ?? new Date().toISOString();
+    await saveBuildFailure({ message: snap.error, at, needsAttention: true });
+    await extensionStore.set(KEYS.buildSnapshot, { ...snap, error: null, phase: null });
+    this.notifyFailure(snap.error, "Homepage build failed — needs you", true);
+  }
+
+  private async recordFailure(
+    message: string,
+    options?: { stampAttempt?: boolean; title?: string; needsAttention?: boolean },
+  ) {
+    const needsAttention = options?.needsAttention !== false;
+    if (options?.stampAttempt !== false) {
+      await extensionStore.set(KEYS.lastAutoBuildAttempt, new Date().toISOString());
+    }
+    await saveBuildFailure({ message, at: new Date().toISOString(), needsAttention });
+    this.state = { ...this.state, running: false, phase: "error", error: message };
+    this.broadcast({ kind: "error", message });
+    await this.mirror(true);
+    this.notifyFailure(message, options?.title ?? "Homepage build failed — needs you", needsAttention);
+  }
+
+  private async clearFailureNotice() {
+    await clearBuildFailure();
     try {
-      browser.notifications.create({
+      await browser.notifications.clear(FAILURE_NOTIFICATION_ID);
+    } catch {
+      // The notification API or this id may already be gone.
+    }
+  }
+
+  private notifyFailure(message: string, title: string, needsAttention: boolean) {
+    // Always notify. An open new tab is easy to miss, and a headless failure
+    // used to vanish when the worker went back to sleep.
+    const retry = needsAttention
+      ? " It will not retry for " + REBUILD_AFTER_HOURS + " hours."
+      : "";
+    try {
+      browser.notifications.create(FAILURE_NOTIFICATION_ID, {
         type: "basic",
         iconUrl: browser.runtime.getURL("/icon/128.png"),
-        title: "Homepage build failed",
-        message: message.slice(0, 200),
+        title,
+        message: (message + retry).slice(0, 220),
+        requireInteraction: true,
+        priority: 2,
       });
     } catch {
-      // notifications permission missing or API unavailable — nothing else to do.
+      // notifications permission missing or API unavailable — the new tab still shows it.
     }
   }
 }

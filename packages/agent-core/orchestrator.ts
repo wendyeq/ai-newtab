@@ -34,6 +34,8 @@ export interface RunOptions {
   userSystemPrompt?: string;
   /** Re-read before every tool call so settings saved mid-build take effect. */
   blockedSites?: string[] | (() => Promise<string[]>);
+  /** Optional host-provided source check (e.g. TSX compile) before accepting a submission. */
+  validateSource?: (source: string) => string | null;
   callbacks?: RunCallbacks;
   signal?: AbortSignal;
   now?: Date;
@@ -136,7 +138,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
       async run(input) {
         const raw = typeof input.source === "string" ? input.source : "";
         const source = prepareHomepageSource(raw);
-        const error = homepageSourceError(source, baseUrl, apiKey);
+        const error = homepageSourceError(source, baseUrl, apiKey) ?? opts.validateSource?.(source) ?? null;
         if (error) return { error };
         code = source;
         callbacks?.onPhase?.("writing");
@@ -174,7 +176,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
     };
     messages.push(assistant);
     if (!assistant.tool_calls?.length) {
-      const action = plainReplyAction(assistant.content, baseUrl, apiKey, plainReplyNudges);
+      const action = plainReplyAction(assistant.content, baseUrl, apiKey, plainReplyNudges, opts.validateSource);
       if (action.type === "accept") {
         callbacks?.onPhase?.("writing");
         return { code: action.source };
@@ -258,10 +260,13 @@ function plainReplyAction(
   baseUrl: string,
   apiKey: string,
   nudgesUsed: number,
+  validateSource?: (source: string) => string | null,
 ): { type: "accept"; source: string } | { type: "nudge"; message: string } | { type: "stop" } {
   const source = prepareHomepageSource(content ?? "");
   const looksLike = looksLikeHomepageSource(source);
-  const error = looksLike ? homepageSourceError(source, baseUrl, apiKey) : null;
+  const error = looksLike
+    ? homepageSourceError(source, baseUrl, apiKey) ?? validateSource?.(source) ?? null
+    : null;
   if (looksLike && !error) return { type: "accept", source };
   if (nudgesUsed >= MAX_PLAIN_REPLY_NUDGES) return { type: "stop" };
   return { type: "nudge", message: error ? `${error}\n${SUBMIT_NUDGE}` : SUBMIT_NUDGE };
