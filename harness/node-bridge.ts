@@ -7,7 +7,7 @@
  * browser in production.
  */
 import { join } from "node:path";
-import type { BrowserBridge, RawSiteMetadata, ScrapedPage } from "@homepage/agent-core";
+import type { BrowserBridge, RawBookmark, RawSiteMetadata, ScrapedPage } from "@homepage/agent-core";
 
 export const OUT_DIR = join(import.meta.dir, "out");
 export const OUT_PATH = join(OUT_DIR, "homepage.tsx");
@@ -62,10 +62,45 @@ function titleOf(html: string, url: string): string {
   return m ? m[1].trim().slice(0, 200) : url;
 }
 
+/** Stand-in for what the extension's lib/bookmarks.ts produces from chrome.bookmarks. */
+export function fixtureBookmarks(now = Date.now()): RawBookmark[] {
+  const dayMs = 24 * 60 * 60 * 1000;
+  return [
+    {
+      title: "The Architecture of Open Source Applications",
+      url: "https://aosabook.org/en/",
+      folderPath: "Bookmarks Bar / Reading",
+      dateAdded: now - 30 * dayMs,
+    },
+    {
+      title: "Julia Evans — Wizard Zines",
+      url: "https://jvns.ca/",
+      folderPath: "Bookmarks Bar / Blogs",
+      dateAdded: now - 20 * dayMs,
+    },
+    {
+      title: "Internal Wiki",
+      url: "https://wiki.company.internal/home",
+      folderPath: "Bookmarks Bar / 公司内网",
+      dateAdded: now - 10 * dayMs,
+    },
+    {
+      title: "Rust Blog",
+      url: "https://blog.rust-lang.org/",
+      folderPath: "Bookmarks Bar / Tech / Rust",
+      dateAdded: now - 5 * dayMs,
+    },
+  ];
+}
+
 export const nodeBridge: BrowserBridge = {
   async getHistory() {
     const sites = fixtureHistory();
     return { sites, totalSitesSeen: sites.length };
+  },
+
+  async getBookmarks() {
+    return fixtureBookmarks();
   },
 
   async getPageHtml({ urls }) {

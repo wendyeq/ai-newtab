@@ -17,6 +17,7 @@ import { BuildFailureBanner } from "./components/BuildFailureBanner";
 import { BuildProgress } from "./components/BuildProgress";
 import { HomepagePreview } from "./components/HomepagePreview";
 import { SettingsModal } from "./components/SettingsModal";
+import { TidyCard } from "./components/TidyCard";
 import { btn, errorBox } from "./components/ui";
 import { useHomepageBuild } from "./useHomepageBuild";
 
@@ -28,6 +29,8 @@ export default function App() {
   const [blockedSites, setBlockedSites] = useState<string[]>(DEFAULT_BLOCKED_SITES);
   const [model, setModel] = useState("");
   const [autoRebuild, setAutoRebuild] = useState(true);
+  const [dailyTidy, setDailyTidy] = useState(true);
+  const [tidyBatchSize, setTidyBatchSize] = useState(15);
   /** Transpiled homepage, ready for the sandbox. */
   const [renderedCode, setRenderedCode] = useState<string | null>(null);
   /** Real TSX compile error if a saved homepage failed to transpile. */
@@ -49,7 +52,7 @@ export default function App() {
     setCompileError(compiled.error);
   }, []);
 
-  const { state, build, cancel } = useHomepageBuild(applyHomepageSource);
+  const { state, build, cancel, tidy, tidySend } = useHomepageBuild(applyHomepageSource);
 
   // Once a build finishes, drop back to the homepage view.
   useEffect(() => {
@@ -68,6 +71,8 @@ export default function App() {
         setBlockedSites(settings.blockedSites);
         setModel(settings.model);
         setAutoRebuild(settings.autoRebuild);
+        setDailyTidy(settings.dailyTidy);
+        setTidyBatchSize(settings.tidyBatchSize);
         if (homepage?.code) applyHomepageSource(homepage.code);
       } finally {
         setLoading(false);
@@ -112,6 +117,16 @@ export default function App() {
   const toggleAutoRebuild = useCallback(async (next: boolean) => {
     setAutoRebuild(next);
     await saveSetting("autoRebuild", next);
+  }, []);
+
+  const toggleDailyTidy = useCallback(async (next: boolean) => {
+    setDailyTidy(next);
+    await saveSetting("dailyTidy", next);
+  }, []);
+
+  const changeTidyBatchSize = useCallback(async (next: number) => {
+    setTidyBatchSize(next);
+    await saveSetting("tidyBatchSize", next);
   }, []);
 
   useEffect(() => {
@@ -164,7 +179,7 @@ export default function App() {
         <p style={{ color: "#555", lineHeight: 1.6 }}>
           {compileError
             ? "The saved homepage source has a TSX syntax error and could not be compiled. Rebuild to generate a working page."
-            : "The agent reads your browsing history, opens the pages you actually follow, and writes a homepage from what it finds today."}
+            : "The agent reads your browsing history and a sample of your bookmarks, opens the pages you actually follow, and writes a homepage from what it finds today."}
         </p>
         {compileError && (
           <pre
@@ -186,6 +201,7 @@ export default function App() {
             {compileError ? "Rebuild now" : "Build today\u2019s homepage"}
           </button>
         </div>
+        <TidyCard tidy={tidy} send={tidySend} />
       </div>
     );
   }
@@ -232,6 +248,8 @@ export default function App() {
 
       <HomepagePreview code={renderedCode} />
 
+      <TidyCard tidy={tidy} send={tidySend} />
+
       {showSettings && (
         <SettingsModal
           initialPrompt={systemPrompt}
@@ -240,6 +258,10 @@ export default function App() {
           model={model}
           autoRebuild={autoRebuild}
           onToggleAutoRebuild={toggleAutoRebuild}
+          dailyTidy={dailyTidy}
+          tidyBatchSize={tidyBatchSize}
+          onToggleDailyTidy={toggleDailyTidy}
+          onTidyBatchSize={changeTidyBatchSize}
           onClose={() => setShowSettings(false)}
           onSave={savePrompt}
         />

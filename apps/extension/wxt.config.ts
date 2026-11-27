@@ -14,6 +14,7 @@ export default defineConfig({
       "storage", //       API key, settings, the built homepage
       "alarms", //        heartbeat: scheduled rebuilds while the browser is open
       "notifications", // keep a failed rebuild on screen until the user deals with it
+      "bookmarks", //   daily tidy: read the tree, apply approved moves
     ],
     // Needed to scrape arbitrary pages and to call the configured API origin.
     host_permissions: ["<all_urls>"],

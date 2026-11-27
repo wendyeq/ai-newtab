@@ -359,3 +359,64 @@ body {
     animation: none;
   }
 }
+
+/* ---- Bookmark tidy dock, bottom-left ---- */
+.tidy-dock {
+  position: fixed;
+  left: 20px;
+  bottom: 20px;
+  z-index: 999;
+  max-width: min(420px, calc(100vw - 160px));
+}
+.tidy-card {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(30, 42, 68, 0.15);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(30, 42, 68, 0.14);
+  padding: 12px 14px;
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #1e2a44;
+}
+.tidy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: default;
+}
+.tidy-head[role="button"] {
+  cursor: pointer;
+}
+.tidy-title {
+  font-weight: 650;
+  font-size: 13px;
+}
+.tidy-caret {
+  color: #8a92a1;
+}
+.tidy-line {
+  margin-top: 8px;
+  color: #444d63;
+}
+.tidy-line.dim {
+  color: #8a92a1;
+  font-size: 12px;
+}
+.tidy-ops {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  max-height: 200px;
+  overflow-y: auto;
+  color: #444d63;
+}
+.tidy-ops li {
+  margin-bottom: 4px;
+}
+.tidy-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.tidy-card a {
+  color: #0066cc;
+}

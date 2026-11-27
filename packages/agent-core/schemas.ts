@@ -24,6 +24,19 @@ export const GET_HISTORY_SCHEMA: ToolInputSchema = {
   required: [],
 };
 
+export const GET_BOOKMARKS_SCHEMA: ToolInputSchema = {
+  type: "object",
+  properties: {
+    maxResults: {
+      type: "integer",
+      minimum: 1,
+      maximum: 30,
+      description: "How many random bookmarks to sample. Default 12.",
+    },
+  },
+  required: [],
+};
+
 export const GET_PAGE_HTML_SCHEMA: ToolInputSchema = {
   type: "object",
   properties: {
@@ -49,6 +62,7 @@ export const GET_PAGE_HTML_SCHEMA: ToolInputSchema = {
 export const DEFAULTS = {
   daysToAnalyze: 14,
   maxResults: 30,
+  bookmarkSampleSize: 12,
   loadDelayMs: 8000,
   /** Cap on titles carried per domain in the digest. */
   sampleTitles: 5,

@@ -6,6 +6,7 @@
  * connect on AGENT_PORT, receive a snapshot, then stream deltas.
  */
 import type { RunPhase } from "@homepage/agent-core";
+import type { TidyPageMsg, TidyStatus } from "./tidy-manager";
 
 export const AGENT_PORT = "homepage-agent";
 
@@ -38,7 +39,8 @@ export const LOG_RETENTION = 40;
 export type PageMsg =
   | { kind: "subscribe" } //                    → replies with a snapshot
   | { kind: "startBuild" } // no-op if one is already running
-  | { kind: "cancel" };
+  | { kind: "cancel" }
+  | TidyPageMsg;
 
 // worker → page (broadcast to every connected tab)
 export type BuildMsg =
@@ -47,12 +49,15 @@ export type BuildMsg =
   | { kind: "text"; chunk: string } // narration delta
   | { kind: "log"; line: string }
   | { kind: "done"; code: string } // homepage saved; carries the raw TSX
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  // bookmark tidy
+  | { kind: "tidyStatus"; status: TidyStatus }
+  | { kind: "tidyLog"; line: string };
 
 /** Repeated phases map to the same step; errors leave the stepper where it was. */
 export const BUILD_STEPS: { label: string; phases: RunPhase[] }[] = [
   { label: "Preparing agent", phases: ["setup"] },
-  { label: "Reading your history", phases: ["history"] },
+  { label: "Reading history & bookmarks", phases: ["history"] },
   { label: "Opening pages in your browser", phases: ["scraping"] },
   { label: "Analyzing pages", phases: ["analyzing"] },
   { label: "Writing your homepage", phases: ["writing", "done"] },

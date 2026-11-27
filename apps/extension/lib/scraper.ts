@@ -17,16 +17,219 @@ interface ScrapeOptions {
   timeout?: number; // Maximum time to wait for a page in ms
   extractTimeout?: number; // Maximum time for one content-script extraction in ms
   concurrentTabs?: number; // Number of tabs to process concurrently
+  challengeTimeout?: number; // How long to wait for an anti-bot check to resolve
+  onLog?: (line: string) => void; // Progress notes for the build log
 }
 
-const DEFAULT_OPTIONS: Required<ScrapeOptions> = {
+const DEFAULT_OPTIONS: Required<Omit<ScrapeOptions, "onLog">> = {
   loadDelay: 8000, // 8 seconds default delay after load
   maxRetries: 3,
   retryDelay: 1000, // 1 second initial retry delay
   timeout: 30000, // 30 seconds timeout
   extractTimeout: 20000, // 20 seconds per extraction attempt
   concurrentTabs: 3, // Process up to 3 tabs at once
+  challengeTimeout: 45000, // 45 seconds for a JS anti-bot check to run
 };
+
+type ScrapeOpts = Required<Omit<ScrapeOptions, "onLog">> & Pick<ScrapeOptions, "onLog">;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Title or visible text of an interactive verification page (Cloudflare, Turnstile, custom gates). */
+const CHALLENGE_PATTERNS = [
+  /just a moment/i,
+  /checking (your browser|if the site)/i,
+  /verify you are human/i,
+  /one more step/i,
+  /attention required/i,
+  /security check/i,
+  /ddos guard/i,
+  /请稍候/,
+  /安全验证/,
+  /正在验证/,
+  /人机验证/,
+  /验证您/,
+];
+/** Challenge shells carry little visible text; a real article under these titles is never this thin. */
+const CHALLENGE_TEXT_LIMIT = 2000;
+/** Markers in the markup of the usual JS-gated shells. */
+const CHALLENGE_HTML_MARKERS = ["cf-chl", "turnstile", "challenge-platform"];
+
+interface PageProbe {
+  title: string;
+  bodyText: string;
+  /** The markup needed to spot challenge shells, not the whole page. */
+  headHtml: string;
+  visibility: string;
+}
+
+/** A small read of title/text/visibility used to spot an anti-bot gate. */
+async function probeTab(tabId: number): Promise<PageProbe | null> {
+  return browser.scripting
+    .executeScript({
+      target: { tabId },
+      func: () => ({
+        title: document.title ?? "",
+        bodyText: (document.body?.innerText ?? "").slice(0, 4000),
+        headHtml: (
+          (document.documentElement?.innerHTML ?? "") .slice(0, 6000) +
+          (document.body?.innerHTML ?? "").slice(0, 6000)
+        ),
+        visibility: document.visibilityState,
+      }),
+    })
+    .then((r) => (r?.[0]?.result as PageProbe | undefined) ?? null)
+    .catch(() => null);
+}
+
+function probeLooksLikeChallenge(probe: PageProbe | null): boolean {
+  if (!probe) return false;
+  const haystack = `${probe.title}\n${probe.bodyText}`;
+  if (probe.bodyText.trim().length > CHALLENGE_TEXT_LIMIT) return false;
+  return (
+    CHALLENGE_PATTERNS.some((p) => p.test(haystack)) ||
+    CHALLENGE_HTML_MARKERS.some((m) => probe.headHtml.includes(m))
+  );
+}
+
+function looksLikeChallenge(result: ScraperResult): boolean {
+  if (CHALLENGE_PATTERNS.some((p) => p.test(result.title ?? ""))) return true;
+  const text = result.html.replace(/<[^>]*>/g, " ");
+  if (CHALLENGE_PATTERNS.some((p) => p.test(text)) && text.trim().length <= CHALLENGE_TEXT_LIMIT)
+    return true;
+  return CHALLENGE_HTML_MARKERS.some((m) => result.html.slice(0, 6000).includes(m));
+}
+
+/** Only one tab can be active per window, so challenge recovery runs one at a time. */
+let challengeLock: Promise<void> = Promise.resolve();
+
+/**
+ * A scraper tab is never focused, so its timers are throttled and a JS anti-bot
+ * check can stall forever. Make the tab active and shrink the window so the
+ * check can run and the user could click an interactive gate; if it still
+ * reports itself hidden (occluded on screen), focus the window for a moment so
+ * the check's timers run.
+ */
+async function resolveChallenge(
+  tabId: number,
+  windowId: number,
+  deadlineMs: number
+): Promise<boolean> {
+  const run = challengeLock.then(async () => {
+    try {
+      await browser.tabs.update(tabId, { active: true });
+      await browser.windows.update(windowId, {
+        focused: false,
+        state: "normal",
+        ...(await scraperWindowPlacement(480, 360)),
+      });
+    } catch {
+      return false;
+    }
+    const deadline = Date.now() + deadlineMs;
+    let nudged = false;
+    while (Date.now() < deadline) {
+      await sleep(2000);
+      const probe = await probeTab(tabId);
+      if (!probe) continue; // navigating between the gate and the real page
+      if (!probeLooksLikeChallenge(probe)) return true;
+      if (!nudged && probe.visibility === "hidden") {
+        nudged = true;
+        // A moment of real focus unthrottles an occluded window; steal it back
+        // quickly and keep the window small so the interruption stays minor.
+        await browser.windows.update(windowId, { focused: true }).catch(() => {});
+        await sleep(1500);
+        await browser.windows.update(windowId, { focused: false }).catch(() => {});
+      }
+    }
+    return false;
+  });
+  challengeLock = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+/**
+ * Scroll-and-snapshot extraction, retried, with a plain DOM snapshot as the
+ * last resort. Returns the page, or null when nothing usable came back.
+ */
+async function extractContent(
+  tabId: number,
+  opts: ScrapeOpts
+): Promise<ScraperResult | null> {
+  let result: ScraperResult | null = null;
+  let retryCount = 0;
+  let currentDelay = opts.retryDelay;
+
+  while (retryCount <= opts.maxRetries && !result) {
+    try {
+      // Scrolls to trigger lazy content, then returns { title, html }.
+      // A page can stall the script indefinitely (throttled timers, a busy
+      // main thread), and nothing else would ever end the build's scrape step.
+      const injectionResults = await withTimeout(
+        browser.scripting.executeScript({
+          target: { tabId },
+          files: ["/content-scripts/scraper.js"],
+        }),
+        opts.extractTimeout,
+        `Extracting tab ${tabId}`
+      );
+
+      if (
+        injectionResults &&
+        injectionResults[0] &&
+        injectionResults[0].result
+      ) {
+        result = injectionResults[0].result as ScraperResult;
+
+        // Validate result has content
+        if (!result.html || result.html.trim() === "") {
+          result = null;
+          throw new Error("Empty content extracted");
+        }
+      }
+    } catch (error) {
+      console.warn(`Attempt ${retryCount + 1} failed for tab ${tabId}:`, error);
+      // A page that timed out will time out again; don't spend the budget twice.
+      if (error instanceof TimeoutError) break;
+
+      if (retryCount < opts.maxRetries) {
+        // Wait before retry with exponential backoff
+        await sleep(currentDelay);
+        currentDelay *= 2; // Exponential backoff
+      }
+    }
+
+    retryCount++;
+  }
+
+  // Fall back to the page as it stands, without the scroll pass, rather than
+  // losing it: on a busy machine a background tab's timers can be throttled
+  // far past the extraction budget.
+  if (!result) {
+    result = await withTimeout(
+      browser.scripting.executeScript({
+        target: { tabId },
+        func: () => ({ url: location.href, title: document.title, html: document.body?.innerHTML ?? "" }),
+      }),
+      SNAPSHOT_TIMEOUT_MS,
+      `Snapshotting tab ${tabId}`
+    )
+      .then((injection) => {
+        const snapshot = injection?.[0]?.result as ScraperResult | undefined;
+        return snapshot?.html?.trim() ? snapshot : null;
+      })
+      .catch(() => null);
+  }
+  return result;
+}
+
+interface ScrapeOutcome {
+  page?: ScrapedPage;
+  reason?: string;
+}
 
 /**
  * The address the extension's own API requests connect to. A private one means a
@@ -102,13 +305,36 @@ function cleanHtmlForLLM(html: string) {
   });
 }
 
+/** Bottom-right placement anchored on the focused window's bounds, so the
+ * scraper window sits out of the way but stays on screen — a fully occluded
+ * window reports visibilityState "hidden" and its timers stay throttled. */
+async function scraperWindowPlacement(
+  width: number,
+  height: number
+): Promise<{ width: number; height: number; left?: number; top?: number }> {
+  try {
+    const anchor = await browser.windows.getLastFocused();
+    if (anchor.left === undefined || anchor.top === undefined || !anchor.width || !anchor.height) {
+      return { width, height };
+    }
+    const margin = 24;
+    return {
+      width,
+      height,
+      left: Math.max(anchor.left, anchor.left + anchor.width - width - margin),
+      top: Math.max(anchor.top, anchor.top + anchor.height - height - margin),
+    };
+  } catch {
+    return { width, height };
+  }
+}
+
 /** Scrape in a separate unfocused window so tabs don't flash in front of the user. */
 async function createScraperWindow(): Promise<number> {
   const win = await browser.windows.create({
     focused: false,
     state: "normal",
-    width: 1200,
-    height: 800,
+    ...(await scraperWindowPlacement(1200, 800)),
   });
   if (win?.id === undefined) throw new Error("Could not open the scraper window");
   return win.id;
@@ -131,9 +357,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 async function scrapeUrl(
   url: string,
   windowId: number,
-  opts: Required<ScrapeOptions>,
+  opts: ScrapeOpts,
   addressOf: (tabId: number) => string | undefined
-): Promise<ScrapedPage | null> {
+): Promise<ScrapeOutcome> {
   let tabId: number | undefined;
   try {
     // Create a new tab in the scraper window
@@ -149,76 +375,28 @@ async function scrapeUrl(
 
     if (!loadComplete) {
       console.error(`Timeout waiting for ${url} to load`);
-      return null;
+      return { reason: "failed to load within timeout" };
     }
 
     // Additional delay for dynamic content
-    await new Promise((resolve) => setTimeout(resolve, opts.loadDelay));
+    await sleep(opts.loadDelay);
 
-    // Try to extract content with retries
-    let result: ScraperResult | null = null;
-    let retryCount = 0;
-    let currentDelay = opts.retryDelay;
+    let result = await extractContent(tabId, opts);
 
-    while (retryCount <= opts.maxRetries && !result) {
-      try {
-        // Scrolls to trigger lazy content, then returns { title, html }.
-        // A page can stall the script indefinitely (throttled timers, a busy
-        // main thread), and nothing else would ever end the build's scrape step.
-        const injectionResults = await withTimeout(
-          browser.scripting.executeScript({
-            target: { tabId },
-            files: ["/content-scripts/scraper.js"],
-          }),
-          opts.extractTimeout,
-          `Extracting ${url}`
-        );
-
-        if (
-          injectionResults &&
-          injectionResults[0] &&
-          injectionResults[0].result
-        ) {
-          result = injectionResults[0].result as ScraperResult;
-
-          // Validate result has content
-          if (!result.html || result.html.trim() === "") {
-            result = null;
-            throw new Error("Empty content extracted");
-          }
-        }
-      } catch (error) {
-        console.warn(`Attempt ${retryCount + 1} failed for ${url}:`, error);
-        // A page that timed out will time out again; don't spend the budget twice.
-        if (error instanceof TimeoutError) break;
-
-        if (retryCount < opts.maxRetries) {
-          // Wait before retry with exponential backoff
-          await new Promise((resolve) => setTimeout(resolve, currentDelay));
-          currentDelay *= 2; // Exponential backoff
-        }
+    // An anti-bot shell returns "successfully": it is a normal page that
+    // finishes loading, but its JS check stalls in a never-focused tab.
+    if (result && looksLikeChallenge(result)) {
+      opts.onLog?.(`verification page on ${new URL(url).hostname}; waiting for it to clear`);
+      const cleared = await resolveChallenge(tabId, windowId, opts.challengeTimeout);
+      if (!cleared) {
+        return { reason: "anti-bot verification did not finish; open the site in your browser to clear it" };
       }
-
-      retryCount++;
-    }
-
-    // Fall back to the page as it stands, without the scroll pass, rather than
-    // losing it: on a busy machine a background tab's timers can be throttled
-    // far past the extraction budget.
-    if (!result) {
-      result = await withTimeout(
-        browser.scripting.executeScript({
-          target: { tabId },
-          func: () => ({ url: location.href, title: document.title, html: document.body?.innerHTML ?? "" }),
-        }),
-        SNAPSHOT_TIMEOUT_MS,
-        `Snapshotting ${url}`
-      )
-        .then((injection) => {
-          const snapshot = injection?.[0]?.result as ScraperResult | undefined;
-          return snapshot?.html?.trim() ? snapshot : null;
-        })
-        .catch(() => null);
+      await waitForTabLoad(tabId, 10000);
+      await sleep(opts.loadDelay);
+      result = await extractContent(tabId, opts);
+      if (result && looksLikeChallenge(result)) {
+        return { reason: "anti-bot verification did not finish; open the site in your browser to clear it" };
+      }
     }
 
     // The address of the document just extracted.
@@ -226,21 +404,22 @@ async function scrapeUrl(
 
     if (result) {
       return {
-        url,
-        finalUrl: result.url,
-        ip,
-        title: result.title,
-        html: cleanHtmlForLLM(result.html),
+        page: {
+          url,
+          finalUrl: result.url,
+          ip,
+          title: result.title,
+          html: cleanHtmlForLLM(result.html),
+        },
       };
-    } else {
-      console.error(
-        `Failed to extract content from ${url} after ${opts.maxRetries} retries`
-      );
-      return null;
     }
+    console.error(
+      `Failed to extract content from ${url} after ${opts.maxRetries} retries`
+    );
+    return { reason: "failed to load or extract within timeout" };
   } catch (error) {
     console.error(`Failed to scrape ${url}:`, error);
-    return null;
+    return { reason: "failed to load or extract within timeout" };
   } finally {
     // Close the tab, even if it already went away.
     if (tabId !== undefined) await browser.tabs.remove(tabId).catch(() => {});
@@ -282,20 +461,20 @@ export async function scrapeUrls(
   try {
     // Keep up to `concurrentTabs` pages loading at once; a slow page holds up
     // only its own slot, not a whole batch.
-    const results: (ScrapedPage | null)[] = new Array(urls.length).fill(null);
+    const outcomes: ScrapeOutcome[] = new Array(urls.length).fill({});
     let next = 0;
     const worker = async () => {
       while (next < urls.length) {
         const i = next++;
-        results[i] = await scrapeUrl(urls[i], windowId, opts, addressOf);
+        outcomes[i] = await scrapeUrl(urls[i], windowId, opts, addressOf);
       }
     };
     await Promise.all(Array.from({ length: Math.min(opts.concurrentTabs, urls.length) }, worker));
 
     urls.forEach((url, i) => {
-      const page = results[i];
-      if (page) pages.push(page);
-      else failed.push({ url, reason: "failed to load or extract within timeout" });
+      const outcome = outcomes[i];
+      if (outcome.page) pages.push(outcome.page);
+      else failed.push({ url, reason: outcome.reason ?? "failed to load or extract within timeout" });
     });
   } finally {
     browser.webRequest.onResponseStarted.removeListener(recordAddress);
