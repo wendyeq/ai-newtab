@@ -9,6 +9,10 @@ export function SettingsModal({
   model,
   autoRebuild,
   onToggleAutoRebuild,
+  dailyTidy,
+  tidyBatchSize,
+  onToggleDailyTidy,
+  onTidyBatchSize,
   onClose,
   onSave,
 }: {
@@ -18,6 +22,10 @@ export function SettingsModal({
   model: string;
   autoRebuild: boolean;
   onToggleAutoRebuild: (next: boolean) => void;
+  dailyTidy: boolean;
+  tidyBatchSize: number;
+  onToggleDailyTidy: (next: boolean) => void;
+  onTidyBatchSize: (next: number) => void;
   onClose: () => void;
   onSave: (next: { prompt: string; blockedSites: string[]; baseUrl: string; model: string; apiKey: string }) => void;
 }) {
@@ -76,7 +84,7 @@ export function SettingsModal({
           />
         </label>
         <p id="blocked-sites-help" style={{ color: "#888", fontSize: 12, margin: "6px 0 0" }}>
-          One per line. Subdomains are included. Use *.example.com for wildcards.
+          One per line. Applies to history, bookmarks, and page loads. Subdomains are included; use *.example.com for wildcards (e.g. company domains). Private IPs and intranet folders are skipped automatically.
         </p>
         <label style={{ display: "block", marginTop: 16, color: "#333", fontSize: 14 }}>
           Base URL
@@ -131,6 +139,42 @@ export function SettingsModal({
           hours old. A failed attempt waits 6 hours, and the error stays on the new tab
           until you dismiss it (uses your API key). Chrome has to be open.
         </p>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginTop: 16,
+            color: "#333",
+            fontSize: 14,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={dailyTidy}
+            onChange={(e) => onToggleDailyTidy(e.target.checked)}
+          />
+          Tidy a few bookmarks every day
+        </label>
+        <p style={{ color: "#888", fontSize: 12, margin: "6px 0 0" }}>
+          Each day the agent reviews a small batch, then leaves a plan on the new tab
+          for you to apply or dismiss — nothing moves without your click. A tidy plan
+          waits for you; the next run only starts after it is handled.
+        </p>
+        {dailyTidy && (
+          <label style={{ display: "block", marginTop: 10, color: "#333", fontSize: 14 }}>
+            Bookmarks per day
+            <input
+              type="number"
+              min={5}
+              max={50}
+              value={tidyBatchSize}
+              onChange={(e) => onTidyBatchSize(Math.max(5, Math.min(50, Number(e.target.value) || 15)))}
+              style={{ ...fieldStyle, width: 90 }}
+            />
+          </label>
+        )}
         <div style={{ display: "flex", gap: 12, marginTop: 20, justifyContent: "flex-end" }}>
           <button
             onClick={onClose}

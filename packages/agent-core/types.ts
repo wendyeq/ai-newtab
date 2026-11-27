@@ -29,6 +29,30 @@ export interface GetHistoryResult {
   sites: SiteDigest[];
 }
 
+/** One raw bookmark leaf as a BrowserBridge returns it — before filtering & sampling. */
+export interface RawBookmark {
+  title: string;
+  url: string;
+  folderPath: string;
+  dateAdded?: number;
+}
+
+/** One sampled bookmark handed to the model. */
+export interface BookmarkSample {
+  title: string;
+  url: string;
+  domain: string;
+  folderPath: string;
+  /** ISO 8601 when available, otherwise null. */
+  dateAdded: string | null;
+}
+
+export interface GetBookmarksResult {
+  /** Eligible (non-blocked, non-intranet) bookmarks in the user's library. */
+  totalBookmarksSeen: number;
+  bookmarks: BookmarkSample[];
+}
+
 export interface GetPageHtmlResult {
   pages: Array<{ url: string; title: string; html: string; truncated: boolean }>;
   /** Surfaced, never swallowed: partial failure is information the model needs. */
@@ -57,16 +81,21 @@ export interface ScrapedPage {
   html: string;
 }
 
-/** The two capabilities supplied by the host browser. */
+/** The capabilities supplied by the host browser. */
 export interface BrowserBridge {
   getHistory(args: {
     daysToAnalyze: number;
     maxResults: number;
   }): Promise<{ sites: RawSiteMetadata[]; totalSitesSeen: number }>;
 
+  /** Optional: raw bookmarks from chrome.bookmarks, before intranet/blocklist filtering. */
+  getBookmarks?(): Promise<RawBookmark[]>;
+
   getPageHtml(args: {
     urls: string[];
     loadDelayMs?: number;
+    /** Progress notes from the loader itself, e.g. an anti-bot check it is waiting out. */
+    onLog?: (line: string) => void;
   }): Promise<{ pages: ScrapedPage[]; failed: Array<{ url: string; reason: string }> }>;
 }
 

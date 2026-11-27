@@ -14,12 +14,23 @@ export const KEYS = {
   blockedSites: "blockedSites",
   model: "model",
   autoRebuild: "autoRebuild",
+  dailyTidy: "dailyTidy",
+  tidyBatchSize: "tidyBatchSize",
   /** ISO timestamp of the last build *attempted* (success or not). */
   lastAutoBuildAttempt: "lastAutoBuildAttempt",
   /** Throttled mirror of the live build state, for tabs that open while the worker sleeps. */
   buildSnapshot: "buildSnapshot",
   /** Last failure still waiting for the user. Cleared on success or dismiss. */
   lastBuildFailure: "lastBuildFailure",
+  /** Daily bookmark-tidy run: when it last ran, where the pass stands. */
+  lastTidyAttempt: "lastTidyAttempt",
+  tidyPass: "tidyPass",
+  /** A generated plan waiting for the user to apply or dismiss. */
+  tidyPendingPlan: "tidyPendingPlan",
+  /** Undo data for the most recent apply. */
+  tidyUndo: "tidyUndo",
+  /** Last tidy-run failure, cleared on the next successful run. */
+  tidyFailure: "tidyFailure",
 } as const;
 
 /** Stable id so a new failure replaces the previous notification instead of stacking. */
@@ -48,6 +59,10 @@ export interface Settings {
   model: string;
   /** Unset means on — auto-rebuild is opt-out. */
   autoRebuild: boolean;
+  /** Unset means on — tidy a small bookmark batch daily. */
+  dailyTidy: boolean;
+  /** Bookmarks reviewed per tidy run; default 15, clamped 5–50. */
+  tidyBatchSize: number;
 }
 
 export const extensionStore = {
@@ -71,6 +86,8 @@ export async function loadSettings(): Promise<Settings> {
     KEYS.blockedSites,
     KEYS.model,
     KEYS.autoRebuild,
+    KEYS.dailyTidy,
+    KEYS.tidyBatchSize,
   ]);
   return {
     baseUrl: (s[KEYS.baseUrl] as string | undefined) ?? "",
@@ -79,6 +96,8 @@ export async function loadSettings(): Promise<Settings> {
     blockedSites: (s[KEYS.blockedSites] as string[] | undefined) ?? [...DEFAULT_BLOCKED_SITES],
     model: (s[KEYS.model] as string | undefined) ?? "",
     autoRebuild: s[KEYS.autoRebuild] !== false,
+    dailyTidy: s[KEYS.dailyTidy] !== false,
+    tidyBatchSize: (s[KEYS.tidyBatchSize] as number | undefined) ?? 15,
   };
 }
 

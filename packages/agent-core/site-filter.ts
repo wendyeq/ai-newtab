@@ -61,7 +61,20 @@ export function isPrivateHost(host: string): boolean {
       (a === 192 && b === 168)
     );
   }
-  return !host.includes(".") || /\.(local|localhost|internal|lan|home\.arpa)$/.test(host);
+  return !host.includes(".") || /\.(local|localhost|internal|intranet|corp|lan|home\.arpa)$/.test(host);
+}
+
+const INTRANET_FOLDER_EN = /\b(intranet|internal|corp|vpn|oa)\b/i;
+const INTRANET_FOLDER_ZH = /内网|公司内网|公司内部|内部系统|内部文档|^公司/;
+
+/** True when any segment of a bookmark's folder path indicates a company intranet folder. */
+export function isIntranetFolderPath(folderPath: string): boolean {
+  if (!folderPath) return false;
+  return folderPath
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .some((segment) => INTRANET_FOLDER_EN.test(segment) || INTRANET_FOLDER_ZH.test(segment));
 }
 
 /** An address the browser connected to, as webRequest reports it (`::1`, not `[::1]`). */

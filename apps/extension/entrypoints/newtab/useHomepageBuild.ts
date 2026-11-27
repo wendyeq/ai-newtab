@@ -7,6 +7,7 @@ import {
   type BuildState,
   type PageMsg,
 } from "@/lib/protocol";
+import { IDLE_TIDY_STATUS, type TidyStatus } from "@/lib/tidy-manager";
 import { KEYS, extensionStore } from "@/lib/storage";
 
 type Port = ReturnType<typeof browser.runtime.connect>;
@@ -32,6 +33,8 @@ function reduce(state: BuildState, msg: BuildMsg): BuildState {
       return { ...state, running: false, phase: "done" };
     case "error":
       return { ...state, running: false, phase: "error", error: msg.message };
+    default:
+      return state; // tidy messages are handled by the caller, not this reducer
   }
 }
 
@@ -43,6 +46,7 @@ function reduce(state: BuildState, msg: BuildMsg): BuildState {
  */
 export function useHomepageBuild(onDone: (code: string) => void) {
   const [state, setState] = useState<BuildState>(INITIAL_BUILD_STATE);
+  const [tidy, setTidy] = useState<TidyStatus>(IDLE_TIDY_STATUS);
   const portRef = useRef<Port | null>(null);
   const onDoneRef = useRef(onDone);
   const heardWorkerRef = useRef(false);
@@ -55,6 +59,11 @@ export function useHomepageBuild(onDone: (code: string) => void) {
       heardWorkerRef.current = true;
       const msg = raw as BuildMsg;
       if (msg.kind === "done") onDoneRef.current(msg.code);
+      if (msg.kind === "tidyStatus") {
+        setTidy(msg.status);
+        return;
+      }
+      if (msg.kind === "tidyLog") return;
       setState((s) => reduce(s, msg));
     };
 
@@ -69,6 +78,7 @@ export function useHomepageBuild(onDone: (code: string) => void) {
         if (!disposed) setTimeout(connect, 500);
       });
       port.postMessage({ kind: "subscribe" } satisfies PageMsg);
+      port.postMessage({ kind: "tidySubscribe" } satisfies PageMsg);
     };
 
     connect();
@@ -99,5 +109,9 @@ export function useHomepageBuild(onDone: (code: string) => void) {
     portRef.current?.postMessage({ kind: "cancel" } satisfies PageMsg);
   }, []);
 
-  return { state, build, cancel };
+  const tidySend = useCallback((kind: "tidyStart" | "tidyApply" | "tidyDismiss" | "tidyUndo") => {
+    portRef.current?.postMessage({ kind } satisfies PageMsg);
+  }, []);
+
+  return { state, build, cancel, tidy, tidySend };
 }

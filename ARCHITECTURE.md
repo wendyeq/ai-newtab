@@ -119,6 +119,19 @@ or a page served from a private address, is reported as
 **The loop stops at 16 completions.** A build that never submits throws
 `tool loop exceeded 16 turns`.
 
+## Bookmark tidy
+
+The same tool loop (`agent-core/tool-loop.ts`) powers a second agent that tidies
+bookmarks a little each day (`agent-core/tidy.ts`, `lib/tidy-manager.ts`). Once
+every 20 hours — and only while Chrome is open — it reads the bookmark tree,
+hands the model the folder digest plus a small batch of bookmarks (oldest
+first, tracked by a cursor in `tidyPass`), and stores the submitted plan in
+`tidyPendingPlan`. Nothing moves without a click: the new-tab card shows the
+plan, and Apply executes it over `chrome.bookmarks` while recording an undo
+log (`tidyUndo`). A waiting plan blocks the next run, so the queue never gets
+ahead of the user. Batch size (5–50, default 15) and the whole feature are in
+Settings.
+
 ## Privacy
 
 The editable blocked-sites list is enforced in agent-core's tool handlers, not
